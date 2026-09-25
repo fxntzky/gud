@@ -1,7 +1,9 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/goodnews.ts": {
-      "maxDuration": 15
+    "api/goodnews.js": {
+      "maxDuration": 120,
+      "includeFiles": "server/**"
     }
   }
 }
