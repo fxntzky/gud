@@ -1,4 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  CategoryNav,
+  categoryLabel,
+  type EditionView,
+} from './components/CategoryNav';
 import { EditionBatch } from './components/EditionBatch';
 import { NewspaperHeader } from './components/NewspaperHeader';
 import { WelcomePreloader } from './components/WelcomePreloader';
@@ -8,7 +13,7 @@ import {
   STORIES_PER_REVEAL,
 } from './config/edition';
 import { fallbackNews } from './data/fallbackNews';
-import type { NewsArticle, NewsResponse } from './types/news';
+import type { NewsArticle, NewsCategory, NewsResponse } from './types/news';
 import { formatUpdatedAt, getUtcEditionKey } from './utils/date';
 import './styles/app.scss';
 
@@ -16,9 +21,29 @@ type Status = 'loading' | 'ready' | 'fallback';
 
 const PRELOADER_MIN_MS = 1800;
 const PRELOADER_EXIT_MS = 620;
+const newsCategories: NewsCategory[] = [
+  'world',
+  'science',
+  'planet',
+  'people',
+  'health',
+  'culture',
+  'animals',
+  'technology',
+];
 
 const cacheKeyForEdition = (editionKey: string): string =>
   `gud:edition:${EDITORIAL_RULESET_VERSION}:${editionKey}`;
+
+const isNewsCategory = (value: string | null): value is NewsCategory =>
+  Boolean(value && newsCategories.includes(value as NewsCategory));
+
+const readViewFromLocation = (): EditionView => {
+  if (typeof window === 'undefined') return 'today';
+
+  const category = new URLSearchParams(window.location.search).get('category');
+  return isNewsCategory(category) ? category : 'today';
+};
 
 function chunkArticles(articles: NewsArticle[], size: number): NewsArticle[][] {
   const chunks: NewsArticle[][] = [];
@@ -36,6 +61,7 @@ function App() {
   const [editionDate, setEditionDate] = useState(getUtcEditionKey());
   const [issueNumber, setIssueNumber] = useState(1);
   const [status, setStatus] = useState<Status>('loading');
+  const [activeView, setActiveView] = useState<EditionView>(readViewFromLocation);
   const [visibleCount, setVisibleCount] = useState(STORIES_PER_REVEAL);
   const [preloaderVisible, setPreloaderVisible] = useState(true);
   const [preloaderLeaving, setPreloaderLeaving] = useState(false);
@@ -119,6 +145,15 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const handlePopState = () => {
+      setActiveView(readViewFromLocation());
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
     if (status === 'loading') return;
 
     const elapsed = Date.now() - preloaderStartedAt.current;
@@ -148,9 +183,31 @@ function App() {
     };
   }, [preloaderVisible]);
 
+  useEffect(() => {
+    setVisibleCount(STORIES_PER_REVEAL);
+  }, [activeView]);
+
+  const categoryCounts = useMemo(() => {
+    const counts: Partial<Record<NewsCategory, number>> = {};
+
+    for (const article of articles) {
+      counts[article.category] = (counts[article.category] ?? 0) + 1;
+    }
+
+    return counts;
+  }, [articles]);
+
+  const filteredArticles = useMemo(
+    () =>
+      activeView === 'today'
+        ? articles
+        : articles.filter((article) => article.category === activeView),
+    [activeView, articles],
+  );
+
   const visibleArticles = useMemo(
-    () => articles.slice(0, visibleCount),
-    [articles, visibleCount],
+    () => filteredArticles.slice(0, visibleCount),
+    [filteredArticles, visibleCount],
   );
 
   const batches = useMemo(
@@ -158,10 +215,25 @@ function App() {
     [visibleArticles],
   );
 
-  const totalStories = articles.length;
-  const hasMore = status === 'ready' && visibleCount < totalStories;
+  const totalStories = filteredArticles.length;
+  const hasMore = status !== 'loading' && visibleCount < totalStories;
   const editionComplete =
-    status === 'ready' && totalStories > 0 && visibleCount >= totalStories;
+    status !== 'loading' && totalStories > 0 && visibleCount >= totalStories;
+  const activeLabel =
+    activeView === 'today' ? 'Today' : categoryLabel(activeView);
+
+  const selectView = (view: EditionView) => {
+    setActiveView(view);
+
+    const url = new URL(window.location.href);
+    if (view === 'today') {
+      url.searchParams.delete('category');
+    } else {
+      url.searchParams.set('category', view);
+    }
+
+    window.history.pushState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  };
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -205,9 +277,25 @@ function App() {
           editionDate={editionDate}
           issueNumber={issueNumber}
           generatedAt={generatedAt}
-          storyCount={status === 'loading' ? 0 : totalStories}
+          storyCount={status === 'loading' ? 0 : articles.length}
           loading={status === 'loading'}
         />
+
+        <CategoryNav
+          activeView={activeView}
+          counts={categoryCounts}
+          total={articles.length}
+          onSelect={selectView}
+        />
+
+        {activeView !== 'today' && status !== 'loading' && (
+          <div className="newspaper__section-heading" aria-live="polite">
+            <span>{activeLabel}</span>
+            <span>
+              {totalStories} {totalStories === 1 ? 'story' : 'stories'} in today’s edition
+            </span>
+          </div>
+        )}
 
         {status === 'fallback' && (
           <aside className="newspaper__notice">
@@ -215,11 +303,11 @@ function App() {
           </aside>
         )}
 
-        {status !== 'loading' && (
+        {status !== 'loading' && totalStories > 0 && (
           <div className="newspaper__edition">
             {batches.map((batch, batchIndex) => (
               <EditionBatch
-                key={`${batchIndex}-${batch[0]?.id ?? 'batch'}`}
+                key={`${activeView}-${batchIndex}-${batch[0]?.id ?? 'batch'}`}
                 articles={batch}
                 batchIndex={batchIndex}
                 startIndex={batchIndex * STORIES_PER_REVEAL}
@@ -227,6 +315,15 @@ function App() {
               />
             ))}
           </div>
+        )}
+
+        {status !== 'loading' && totalStories === 0 && (
+          <section className="newspaper__empty" aria-live="polite">
+            <p>Nothing in {activeLabel.toLowerCase()} made today’s edition.</p>
+            <button type="button" onClick={() => selectView('today')}>
+              Back to today
+            </button>
+          </section>
         )}
 
         {hasMore && (
@@ -242,7 +339,8 @@ function App() {
         {editionComplete && (
           <footer className="newspaper__footer">
             <div className="newspaper__footer-count">
-              {String(totalStories).padStart(2, '0')} / {totalStories} · END OF TODAY’S EDITION
+              {String(totalStories).padStart(2, '0')} / {totalStories} · END OF{' '}
+              {activeView === 'today' ? 'TODAY’S EDITION' : activeLabel.toUpperCase()}
             </div>
 
             <div className="newspaper__footer-message">
