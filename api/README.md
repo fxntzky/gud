@@ -136,3 +136,7 @@ React
 
 **LIFE IS GOOD.**  
 *Go outside.*
+
+## Deployment note
+
+Production uses a single Vercel Function at `api/goodnews.js`. Shared backend logic lives in `server/` so helper modules are not treated as separate API Functions on the Hobby plan.
