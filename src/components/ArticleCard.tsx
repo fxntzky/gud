@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { NewsArticle, NewsEdition } from '../types/news';
 import { categoryLabel } from './CategoryNav';
 import { formatDate, formatRelativeTime } from '../utils/date';
@@ -14,23 +14,16 @@ interface ArticleCardProps {
   variant?: ArticleVariant;
 }
 
-const houseMessages: Record<NewsEdition, ReadonlyArray<{ label: string; copy: string }>> = {
-  english: [
-    { label: 'House message', copy: 'life is gud.' },
-    { label: 'House message', copy: 'today, in brief.' },
-    { label: 'House message', copy: 'good news is still news.' },
-    { label: 'House message', copy: 'from across the web.' },
-  ],
-  latam: [
-    { label: 'Mensaje GUD', copy: 'la vida es gud.' },
-    { label: 'Mensaje GUD', copy: 'hoy, en breve.' },
-    { label: 'Mensaje GUD', copy: 'GOOD NEWS sigue siendo noticia.' },
-    { label: 'Mensaje GUD', copy: 'desde toda la web.' },
-  ],
-};
-
 const formatStoryNumber = (value: number): string =>
   String(value).padStart(2, '0');
+
+const uniqueImageCandidates = (article: NewsArticle): string[] => [
+  ...new Set(
+    [...(article.imageCandidates ?? []), article.imageUrl].filter(
+      (value): value is string => Boolean(value),
+    ),
+  ),
+];
 
 export function ArticleCard({
   article,
@@ -39,17 +32,28 @@ export function ArticleCard({
   total,
   variant = 'standard',
 }: ArticleCardProps) {
-  const [imageFailed, setImageFailed] = useState(false);
+  const candidates = useMemo(() => uniqueImageCandidates(article), [article]);
+  const [candidateIndex, setCandidateIndex] = useState(0);
   const isPlaceholder = article.url === '#';
   const storyNumber = index + 1;
-  const hasImage = Boolean(article.imageUrl) && !imageFailed;
-  const houseMessage = houseMessages[edition][index % houseMessages[edition].length];
+  const currentImage = candidates[candidateIndex];
+  const hasImage = Boolean(currentImage);
   const isLatam = edition === 'latam';
+
+  useEffect(() => {
+    setCandidateIndex(0);
+  }, [article.id]);
+
+  const tryNextImage = () => {
+    setCandidateIndex((current) => current + 1);
+  };
+
   const handleOutboundClick = () =>
     trackOutboundSourceClick({
       source: article.source,
       edition,
     });
+
   const cardClassName = [
     'article-card',
     `article-card--${variant}`,
@@ -60,18 +64,19 @@ export function ArticleCard({
 
   return (
     <article className={cardClassName}>
-      <div className="article-card__rail" aria-label={hasImage ? undefined : houseMessage.label}>
+      <div className="article-card__rail" aria-label={hasImage ? undefined : article.title}>
         {hasImage ? (
           <div className="article-card__media">
             {isPlaceholder ? (
               <img
+                key={currentImage}
                 className="article-card__image"
-                src={article.imageUrl}
+                src={currentImage}
                 alt=""
                 loading={variant === 'hero' ? 'eager' : 'lazy'}
                 decoding="async"
                 referrerPolicy="no-referrer"
-                onError={() => setImageFailed(true)}
+                onError={tryNextImage}
               />
             ) : (
               <a
@@ -87,21 +92,22 @@ export function ArticleCard({
                 }
               >
                 <img
+                  key={currentImage}
                   className="article-card__image"
-                  src={article.imageUrl}
+                  src={currentImage}
                   alt=""
                   loading={variant === 'hero' ? 'eager' : 'lazy'}
                   decoding="async"
                   referrerPolicy="no-referrer"
-                  onError={() => setImageFailed(true)}
+                  onError={tryNextImage}
                 />
               </a>
             )}
           </div>
         ) : (
-          <aside className="article-card__house" aria-label={houseMessage.label}>
-            <span>{houseMessage.label}</span>
-            <strong>{houseMessage.copy}</strong>
+          <aside className="article-card__house" aria-label={article.title}>
+            <span>{article.source}</span>
+            <strong>{article.title}</strong>
           </aside>
         )}
       </div>

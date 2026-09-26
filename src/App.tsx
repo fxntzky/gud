@@ -67,6 +67,26 @@ function chunkArticles(articles: NewsArticle[], size: number): NewsArticle[][] {
   return chunks;
 }
 
+const hasDeclaredImage = (article: NewsArticle): boolean =>
+  Boolean(article.imageUrl || article.imageCandidates?.some(Boolean));
+
+const placeImageLessStoriesInMiddle = (stories: NewsArticle[]): NewsArticle[] => {
+  if (stories.length < 2) return stories;
+
+  const withImage = stories.filter(hasDeclaredImage);
+  const withoutImage = stories.filter((article) => !hasDeclaredImage(article));
+
+  if (withoutImage.length === 0 || withImage.length === 0) return stories;
+
+  const insertAt = Math.max(1, Math.floor(withImage.length / 2));
+
+  return [
+    ...withImage.slice(0, insertAt),
+    ...withoutImage,
+    ...withImage.slice(insertAt),
+  ];
+};
+
 function App() {
   const [edition, setEdition] = useState<NewsEdition | null>(null);
   const [articles, setArticles] = useState<NewsArticle[]>([]);
@@ -245,13 +265,14 @@ function App() {
     return counts;
   }, [articles]);
 
-  const filteredArticles = useMemo(
-    () =>
+  const filteredArticles = useMemo(() => {
+    const stories =
       activeView === 'today'
         ? articles
-        : articles.filter((article) => article.category === activeView),
-    [activeView, articles],
-  );
+        : articles.filter((article) => article.category === activeView);
+
+    return placeImageLessStoriesInMiddle(stories);
+  }, [activeView, articles]);
 
   const visibleArticles = useMemo(
     () => filteredArticles.slice(0, visibleCount),

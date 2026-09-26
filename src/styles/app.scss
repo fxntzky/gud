@@ -175,14 +175,15 @@
     strong {
       align-self: center;
       justify-self: center;
-      max-width: 12ch;
+      max-width: 18ch;
       font-family: var(--sans);
-      font-size: clamp(1.15rem, 2vw, 1.9rem);
+      font-size: clamp(1rem, 1.65vw, 1.55rem);
       font-weight: 700;
-      line-height: 0.95;
-      letter-spacing: -0.045em;
+      line-height: 1;
+      letter-spacing: -0.04em;
       text-align: center;
-      text-transform: lowercase;
+      text-wrap: balance;
+      text-transform: none;
     }
   }
 
