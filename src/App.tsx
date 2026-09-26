@@ -5,6 +5,8 @@ import {
   type EditionView,
 } from './components/CategoryNav';
 import { EditionBatch } from './components/EditionBatch';
+import { EditionSwitch } from './components/EditionSwitch';
+import { EditionWelcome } from './components/EditionWelcome';
 import { NewspaperHeader } from './components/NewspaperHeader';
 import { WelcomePreloader } from './components/WelcomePreloader';
 import {
@@ -12,8 +14,14 @@ import {
   EDITORIAL_RULESET_VERSION,
   STORIES_PER_REVEAL,
 } from './config/edition';
+import { editionCopy, editionLanguage } from './config/copy';
 import { fallbackNews } from './data/fallbackNews';
-import type { NewsArticle, NewsCategory, NewsResponse } from './types/news';
+import type {
+  NewsArticle,
+  NewsCategory,
+  NewsEdition,
+  NewsResponse,
+} from './types/news';
 import { formatUpdatedAt, getUtcEditionKey } from './utils/date';
 import './styles/app.scss';
 
@@ -21,19 +29,23 @@ type Status = 'loading' | 'ready' | 'fallback';
 
 const PRELOADER_MIN_MS = 1800;
 const PRELOADER_EXIT_MS = 620;
+
 const newsCategories: NewsCategory[] = [
-  'world',
   'science',
-  'planet',
-  'people',
   'health',
-  'culture',
-  'animals',
+  'nature',
   'technology',
+  'society',
+  'education',
+  'culture',
+  'community',
 ];
 
-const cacheKeyForEdition = (editionKey: string): string =>
-  `gud:edition:${EDITORIAL_RULESET_VERSION}:${editionKey}`;
+const cacheKeyForEdition = (
+  editionKey: string,
+  edition: NewsEdition,
+): string =>
+  `gud:edition:${EDITORIAL_RULESET_VERSION}:${edition}:${editionKey}`;
 
 const isNewsCategory = (value: string | null): value is NewsCategory =>
   Boolean(value && newsCategories.includes(value as NewsCategory));
@@ -56,6 +68,7 @@ function chunkArticles(articles: NewsArticle[], size: number): NewsArticle[][] {
 }
 
 function App() {
+  const [edition, setEdition] = useState<NewsEdition | null>(null);
   const [articles, setArticles] = useState<NewsArticle[]>([]);
   const [generatedAt, setGeneratedAt] = useState<string>();
   const [editionDate, setEditionDate] = useState(getUtcEditionKey());
@@ -63,22 +76,40 @@ function App() {
   const [status, setStatus] = useState<Status>('loading');
   const [activeView, setActiveView] = useState<EditionView>(readViewFromLocation);
   const [visibleCount, setVisibleCount] = useState(STORIES_PER_REVEAL);
-  const [preloaderVisible, setPreloaderVisible] = useState(true);
+  const [preloaderVisible, setPreloaderVisible] = useState(false);
   const [preloaderLeaving, setPreloaderLeaving] = useState(false);
-  const preloaderStartedAt = useRef(Date.now());
+  const [backToTopVisible, setBackToTopVisible] = useState(false);
+  const preloaderStartedAt = useRef(0);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (!edition) return;
+
+    const activeEdition = edition;
     const controller = new AbortController();
-    const editionKey = getUtcEditionKey();
+    const dateKey = getUtcEditionKey();
+    const cacheKey = cacheKeyForEdition(dateKey, activeEdition);
     let hadCachedEdition = false;
 
+    document.documentElement.lang = activeEdition === 'latam' ? 'es-419' : 'en';
+
+    setStatus('loading');
+    setPreloaderLeaving(false);
+    setArticles([]);
+    setGeneratedAt(undefined);
+    setEditionDate(dateKey);
+    setVisibleCount(STORIES_PER_REVEAL);
+
     try {
-      const cached = window.localStorage.getItem(cacheKeyForEdition(editionKey));
+      const cached = window.localStorage.getItem(cacheKey);
       if (cached) {
         const data = JSON.parse(cached) as NewsResponse;
 
-        if (data.articles?.length > 0 && data.editionDate === editionKey) {
+        if (
+          data.articles?.length > 0 &&
+          data.editionDate === dateKey &&
+          data.edition === activeEdition
+        ) {
           hadCachedEdition = true;
           setArticles(data.articles.slice(0, EDITION_LIMIT));
           setGeneratedAt(data.generatedAt);
@@ -89,13 +120,13 @@ function App() {
         }
       }
     } catch {
-      window.localStorage.removeItem(cacheKeyForEdition(editionKey));
+      window.localStorage.removeItem(cacheKey);
     }
 
     const loadNews = async () => {
       try {
         const response = await fetch(
-          `/api/goodnews?edition=${encodeURIComponent(editionKey)}&rules=${encodeURIComponent(EDITORIAL_RULESET_VERSION)}`,
+          `/api/goodnews?date=${encodeURIComponent(dateKey)}&edition=${encodeURIComponent(activeEdition)}&rules=${encodeURIComponent(EDITORIAL_RULESET_VERSION)}`,
           { signal: controller.signal },
         );
 
@@ -109,18 +140,19 @@ function App() {
           throw new Error('Today’s edition is empty.');
         }
 
+        if (data.edition !== activeEdition) {
+          throw new Error('News endpoint returned the wrong GUD edition.');
+        }
+
         setArticles(data.articles.slice(0, EDITION_LIMIT));
         setGeneratedAt(data.generatedAt);
-        setEditionDate(data.editionDate ?? editionKey);
+        setEditionDate(data.editionDate ?? dateKey);
         setIssueNumber(data.issueNumber ?? 1);
         setVisibleCount(STORIES_PER_REVEAL);
         setStatus('ready');
 
         try {
-          window.localStorage.setItem(
-            cacheKeyForEdition(editionKey),
-            JSON.stringify(data),
-          );
+          window.localStorage.setItem(cacheKey, JSON.stringify(data));
         } catch {
           // Browser storage is only a speed-up.
         }
@@ -131,9 +163,9 @@ function App() {
 
         if (hadCachedEdition) return;
 
-        setArticles(fallbackNews);
+        setArticles(fallbackNews[activeEdition]);
         setGeneratedAt(new Date().toISOString());
-        setEditionDate(editionKey);
+        setEditionDate(dateKey);
         setVisibleCount(STORIES_PER_REVEAL);
         setStatus('fallback');
       }
@@ -142,7 +174,7 @@ function App() {
     void loadNews();
 
     return () => controller.abort();
-  }, []);
+  }, [edition]);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -154,7 +186,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (status === 'loading') return;
+    if (!edition || !preloaderVisible || status === 'loading') return;
 
     const elapsed = Date.now() - preloaderStartedAt.current;
     const remaining = Math.max(0, PRELOADER_MIN_MS - elapsed);
@@ -163,7 +195,7 @@ function App() {
     }, remaining);
 
     return () => window.clearTimeout(timeout);
-  }, [status]);
+  }, [edition, preloaderVisible, status]);
 
   useEffect(() => {
     if (!preloaderLeaving) return;
@@ -176,16 +208,32 @@ function App() {
   }, [preloaderLeaving]);
 
   useEffect(() => {
-    document.documentElement.classList.toggle('is-preloading', preloaderVisible);
+    const overlayVisible = !edition || preloaderVisible;
+    document.documentElement.classList.toggle('is-preloading', overlayVisible);
 
     return () => {
       document.documentElement.classList.remove('is-preloading');
     };
-  }, [preloaderVisible]);
+  }, [edition, preloaderVisible]);
 
   useEffect(() => {
     setVisibleCount(STORIES_PER_REVEAL);
-  }, [activeView]);
+  }, [activeView, edition]);
+
+  useEffect(() => {
+    const updateBackToTop = () => {
+      setBackToTopVisible(window.scrollY > window.innerHeight * 1.25);
+    };
+
+    updateBackToTop();
+    window.addEventListener('scroll', updateBackToTop, { passive: true });
+    window.addEventListener('resize', updateBackToTop);
+
+    return () => {
+      window.removeEventListener('scroll', updateBackToTop);
+      window.removeEventListener('resize', updateBackToTop);
+    };
+  }, []);
 
   const categoryCounts = useMemo(() => {
     const counts: Partial<Record<NewsCategory, number>> = {};
@@ -215,14 +263,20 @@ function App() {
     [visibleArticles],
   );
 
+  const activeEdition: NewsEdition = edition ?? 'english';
+  const copy = editionCopy[activeEdition];
   const totalStories = filteredArticles.length;
   const hasMore = status !== 'loading' && visibleCount < totalStories;
   const editionComplete =
     status !== 'loading' && totalStories > 0 && visibleCount >= totalStories;
   const activeLabel =
-    activeView === 'today' ? 'Today' : categoryLabel(activeView);
+    activeView === 'today'
+      ? copy.today
+      : categoryLabel(activeView, activeEdition);
 
   const selectView = (view: EditionView) => {
+    if (!edition) return;
+
     setActiveView(view);
 
     const url = new URL(window.location.href);
@@ -231,8 +285,46 @@ function App() {
     } else {
       url.searchParams.set('category', view);
     }
+    url.searchParams.set('edition', edition);
+    url.searchParams.delete('lang');
 
     window.history.pushState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  };
+
+  const selectEdition = (nextEdition: NewsEdition) => {
+    if (nextEdition === edition && !preloaderVisible) return;
+
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set('edition', nextEdition);
+    nextUrl.searchParams.delete('lang');
+    nextUrl.searchParams.delete('category');
+    window.history.pushState(
+      {},
+      '',
+      `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`,
+    );
+
+    setActiveView('today');
+    setArticles([]);
+    setGeneratedAt(undefined);
+    setStatus('loading');
+    setVisibleCount(STORIES_PER_REVEAL);
+    setPreloaderLeaving(false);
+    preloaderStartedAt.current = Date.now();
+    setPreloaderVisible(true);
+    window.scrollTo({ top: 0, behavior: 'auto' });
+    setEdition(nextEdition);
+  };
+
+  const scrollToTop = () => {
+    const reducedMotion = window.matchMedia(
+      '(prefers-reduced-motion: reduce)',
+    ).matches;
+
+    window.scrollTo({
+      top: 0,
+      behavior: reducedMotion ? 'auto' : 'smooth',
+    });
   };
 
   useEffect(() => {
@@ -261,19 +353,23 @@ function App() {
 
   return (
     <>
-      {preloaderVisible && (
+      {!edition && <EditionWelcome onSelect={selectEdition} />}
+
+      {edition && preloaderVisible && (
         <WelcomePreloader
+          edition={edition}
           editionDate={editionDate}
           leaving={preloaderLeaving}
         />
       )}
 
       <main
-        className={`newspaper${preloaderVisible ? ' newspaper--preloading' : ''}`}
+        className={`newspaper${!edition || preloaderVisible ? ' newspaper--preloading' : ''}`}
         aria-busy={status === 'loading' || preloaderVisible}
-        aria-hidden={preloaderVisible || undefined}
+        aria-hidden={!edition || preloaderVisible || undefined}
       >
         <NewspaperHeader
+          edition={activeEdition}
           editionDate={editionDate}
           issueNumber={issueNumber}
           generatedAt={generatedAt}
@@ -281,34 +377,35 @@ function App() {
           loading={status === 'loading'}
         />
 
-        <CategoryNav
-          activeView={activeView}
-          counts={categoryCounts}
-          total={articles.length}
-          onSelect={selectView}
-        />
+        <div className="newspaper-controls">
+          <CategoryNav
+            activeView={activeView}
+            counts={categoryCounts}
+            total={articles.length}
+            edition={activeEdition}
+            onSelect={selectView}
+          />
+          <EditionSwitch edition={activeEdition} onChange={selectEdition} />
+        </div>
 
         {activeView !== 'today' && status !== 'loading' && (
           <div className="newspaper__section-heading" aria-live="polite">
             <span>{activeLabel}</span>
-            <span>
-              {totalStories} {totalStories === 1 ? 'story' : 'stories'} in today’s edition
-            </span>
+            <span>{copy.storiesInEdition(totalStories)}</span>
           </div>
         )}
 
         {status === 'fallback' && (
-          <aside className="newspaper__notice">
-            Local preview · run <code>npm run dev:vercel</code> to load today’s RSS edition.
-          </aside>
+          <aside className="newspaper__notice">{copy.fallback}</aside>
         )}
 
         {status !== 'loading' && totalStories > 0 && (
-          <div className="newspaper__edition">
+          <div className="newspaper__edition" lang={editionLanguage[activeEdition]}>
             {batches.map((batch, batchIndex) => (
               <EditionBatch
-                key={`${activeView}-${batchIndex}-${batch[0]?.id ?? 'batch'}`}
+                key={`${activeEdition}-${activeView}-${batchIndex}-${batch[0]?.id ?? 'batch'}`}
                 articles={batch}
+                edition={activeEdition}
                 batchIndex={batchIndex}
                 startIndex={batchIndex * STORIES_PER_REVEAL}
                 total={totalStories}
@@ -319,9 +416,9 @@ function App() {
 
         {status !== 'loading' && totalStories === 0 && (
           <section className="newspaper__empty" aria-live="polite">
-            <p>Nothing in {activeLabel.toLowerCase()} made today’s edition.</p>
+            <p>{copy.empty(activeLabel)}</p>
             <button type="button" onClick={() => selectView('today')}>
-              Back to today
+              {copy.backToToday}
             </button>
           </section>
         )}
@@ -332,31 +429,54 @@ function App() {
               {String(Math.min(visibleCount, totalStories)).padStart(2, '0')} /{' '}
               {totalStories}
             </span>
-            <span className="edition-turn__label">Next three ↓</span>
+            <span className="edition-turn__label">{copy.nextThree}</span>
           </div>
         )}
 
         {editionComplete && (
           <footer className="newspaper__footer">
             <div className="newspaper__footer-count">
-              {String(totalStories).padStart(2, '0')} / {totalStories} · END OF{' '}
-              {activeView === 'today' ? 'TODAY’S EDITION' : activeLabel.toUpperCase()}
+              {String(totalStories).padStart(2, '0')} / {totalStories} ·{' '}
+              {activeView === 'today'
+                ? copy.endOfEdition
+                : copy.endOfSection(activeLabel)}
             </div>
 
             <div className="newspaper__footer-message">
-              <h2>LIFE IS GOOD.</h2>
-              <p>Go outside.</p>
-              <span>Come back tomorrow.</span>
+              <h2>{copy.footerTitle}</h2>
+              <p>{copy.footerLead}</p>
+              <span>{copy.footerReturn}</span>
             </div>
 
             <div className="newspaper__footer-meta">
-              <span>One story per source. No infinite scroll.</span>
-              <span>Deterministic editorial rules · no generative AI.</span>
-              <span>{formatUpdatedAt(generatedAt)}</span>
+              <span>{copy.footerSource}</span>
+              <span>{copy.footerRules}</span>
+              <span>{formatUpdatedAt(generatedAt, activeEdition)}</span>
             </div>
           </footer>
         )}
       </main>
+
+      {edition && !preloaderVisible && (
+        <button
+          type="button"
+          className={`back-to-top${
+            backToTopVisible ? ' back-to-top--visible' : ''
+          }`}
+          onClick={scrollToTop}
+          aria-label={
+            activeEdition === 'latam' ? 'Volver arriba' : 'Back to top'
+          }
+          tabIndex={backToTopVisible ? 0 : -1}
+        >
+          <span className="back-to-top__arrow" aria-hidden="true">
+            ↑
+          </span>
+          <span className="back-to-top__label">
+            {activeEdition === 'latam' ? 'ARRIBA' : 'TOP'}
+          </span>
+        </button>
+      )}
     </>
   );
 }

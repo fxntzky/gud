@@ -1,12 +1,15 @@
+export type NewsEdition = 'english' | 'latam';
+export type NewsLanguage = 'en' | 'es';
+
 export type NewsCategory =
-  | 'world'
   | 'science'
-  | 'planet'
-  | 'people'
   | 'health'
+  | 'nature'
+  | 'technology'
+  | 'society'
+  | 'education'
   | 'culture'
-  | 'animals'
-  | 'technology';
+  | 'community';
 
 export interface NewsArticle {
   id: string;
@@ -15,6 +18,7 @@ export interface NewsArticle {
   source: string;
   publishedAt: string;
   category: NewsCategory;
+  language: NewsLanguage;
   excerpt?: string;
   imageUrl?: string;
   imageCandidates?: string[];
@@ -34,6 +38,7 @@ export interface NewsDiagnostics {
     invalid: number;
     blocked: number;
     outOfWindow: number;
+    wrongLanguage: number;
     disqualified: number;
     noPositiveOutcome: number;
     belowScore: number;
@@ -49,6 +54,8 @@ export interface NewsResponse {
   articles: NewsArticle[];
   generatedAt: string;
   editionDate: string;
+  edition: NewsEdition;
+  language: NewsLanguage;
   issueNumber: number;
   count: number;
   editionLimit: number;
