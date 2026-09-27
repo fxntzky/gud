@@ -1,4 +1,4 @@
-// GUD v6.3 editorial model
+// GUD v6.8 editorial model
 // ------------------------
 // Editorial eligibility is evaluated as context, not as a bag of keywords.
 // The hierarchy is title -> deck/subtitle -> excerpt. A positive secondary
@@ -221,6 +221,32 @@ const geopoliticalPatterns = [
     /\b(?:estrecho de ormuz|alto el fuego|negociaciones de paz|sanciones?|diplom[aá]tic[oa]|diplomacia|canciller|consejo de seguridad|otan|disputa territorial|negociaciones nucleares|paso fronterizo)\b/i,
 ];
 
+
+const falsePositiveOutcomePatterns = [
+    // Speculative or merely potential benefits are not realized outcomes.
+    /\b(?:could|may|might|potential(?:ly)?|promising|promise of|offers? hope|hope for|has the potential to)\b.{0,90}\b(?:reduce|improve|prevent|protect|save|treat|cure|restore|reverse|extend|boost|help)\b/i,
+    /\b(?:podr[ií]a|podr[ií]an|puede que|potencial(?:mente)?|prometedor(?:a|es)?|ofrece esperanza|esperanza de|tiene potencial para)\b.{0,92}\b(?:reducir|mejorar|prevenir|proteger|salvar|tratar|curar|restaurar|revertir|prolongar|aumentar|ayudar)\b/i,
+
+    // Association/correlation is evidence of a relationship, not proof of a
+    // beneficial intervention or outcome.
+    /\b(?:associated with|linked to|correlated with|connection between)\b.{0,70}\b(?:lower|reduced|improved|better|longer|less|fewer)\b/i,
+    /\b(?:asociad[oa] con|vinculad[oa] con|correlacionad[oa] con|relaci[oó]n entre)\b.{0,72}\b(?:menor|menos|reducid[oa]|mejor|mayor supervivencia|menos riesgo)\b/i,
+
+    // Early/preclinical health evidence is useful science, but should not be
+    // presented by GUD as an already-realized human health benefit.
+    /\b(?:in mice|in rats|in animals|mouse study|animal study|preclinical|in vitro|lab study|laboratory study)\b/i,
+    /\b(?:en ratones|en ratas|en animales|estudio en animales|precl[ií]nic[oa]|in vitro|estudio de laboratorio)\b/i,
+
+    // Preliminary evidence should not be promoted as a settled positive result.
+    /\b(?:preliminary|early-stage|early stage|preprint|not peer[- ]reviewed)\b/i,
+    /\b(?:preliminar(?:es)?|fase temprana|etapa temprana|preprint|sin revisi[oó]n por pares|no revisad[oa] por pares)\b/i,
+];
+
+const healthBenefitClaimPatterns = [
+    /\b(?:treatment|therapy|drug|medicine|vaccine|procedure|intervention)\b.{0,80}\b(?:reduce|improve|prevent|protect|save|treat|cure|restore|reverse|extend|boost)\b/i,
+    /\b(?:tratamiento|terapia|f[aá]rmaco|medicamento|vacuna|procedimiento|intervenci[oó]n)\b.{0,82}\b(?:reduce|mejora|previene|protege|salva|trata|cura|restaura|revierte|prolonga|aumenta)\b/i,
+];
+
 const conditionalFuturePatterns = [
     /\b(?:to|will|would|could|may|might|plans? to|aims? to|seeks? to|set to)\b.{0,56}\b(?:open|reopen|launch|expand|restore|reduce|improve|protect|save|cut|build|create|deliver|provide)\b.{0,80}\bif\b/i,
     /\bif\b.{0,80}\b(?:agrees?|approves?|passes?|accepts?|funds?|allows?)\b/i,
@@ -389,6 +415,41 @@ const matchesAny = (patterns, text = '') =>
 const hasPositiveResolution = (text = '') =>
     matchesAny(positiveResolutionHeadlinePatterns, text) ||
     matchesAny(strongOutcomePatterns, text);
+
+
+export const hasFalsePositiveSignal = ({
+    title = '',
+    deck = '',
+    excerpt = '',
+    category = 'society',
+} = {}) => {
+    const mainContext = `${title} ${deck}`.trim();
+    const fullContext = `${mainContext} ${excerpt}`.trim();
+
+    // Speculation, correlation and explicitly preliminary claims are not
+    // completed positive outcomes in any edition language.
+    const speculativeOrPreliminary = matchesAny(
+        falsePositiveOutcomePatterns.slice(0, 4),
+        mainContext,
+    );
+    if (speculativeOrPreliminary) return true;
+
+    // Preclinical evidence is only a false positive when the story is framed
+    // as a health benefit. A basic-science animal discovery can still qualify
+    // as science through the normal knowledge-gain rules.
+    const preclinical = matchesAny(falsePositiveOutcomePatterns.slice(4, 6), fullContext);
+    if (
+        preclinical &&
+        (category === 'health' || matchesAny(healthBenefitClaimPatterns, mainContext))
+    ) {
+        return true;
+    }
+
+    const preliminary = matchesAny(falsePositiveOutcomePatterns.slice(6), fullContext);
+    if (preliminary && category === 'health') return true;
+
+    return false;
+};
 
 export const hasDisqualifyingSignal = (text, title = text, deck = '') => {
     const positiveResolution = hasPositiveResolution(`${title} ${deck}`);

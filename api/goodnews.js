@@ -11,6 +11,7 @@ import {
 } from '../server/imageResolver.js';
 import {
     hasDisqualifyingSignal,
+    hasFalsePositiveSignal,
     hasQualifyingOutcome,
     scoreGoodNews,
 } from '../server/goodNewsScore.js';
@@ -19,6 +20,11 @@ import {
     getNewsSources,
 } from '../server/newsSources.js';
 import { fetchSourceItems } from '../server/sourceAdapters.js';
+import {
+    commitDailyEdition,
+    readDailyEdition,
+    sharedEditionStoreConfigured,
+} from '../server/dailyEditionStore.js';
 
 const MIN_SCORE = 2;
 const MAX_LOOKBACK_HOURS = 72;
@@ -35,6 +41,7 @@ const emptyRejections = () => ({
     outOfWindow: 0,
     wrongLanguage: 0,
     disqualified: 0,
+    falsePositive: 0,
     noPositiveOutcome: 0,
     belowScore: 0,
 });
@@ -399,7 +406,19 @@ const buildSourceCandidates = async (source, editionDate, language) => {
 
         const category = classifyCategory(searchableText, source.category);
 
-        // v6.3: eligibility and ranking are separate. Every story must first
+        if (
+            hasFalsePositiveSignal({
+                title,
+                deck,
+                excerpt,
+                category,
+            })
+        ) {
+            rejected.falsePositive += 1;
+            continue;
+        }
+
+        // v6.8: eligibility and ranking are separate. Every story must first
         // describe a realized, desirable outcome in its title/deck. Scoring then
         // ranks the eligible stories instead of turning positive vocabulary into
         // an admission ticket.
@@ -568,6 +587,26 @@ const buildEdition = (candidates, editionDate, language) => {
 const errorMessage = (reason) =>
     reason instanceof Error ? reason.message : String(reason);
 
+const setEditionHeaders = (res, { editionDate, edition, language }) => {
+    res.setHeader(
+        'Vercel-CDN-Cache-Control',
+        'public, max-age=86400, stale-while-revalidate=3600, stale-if-error=604800',
+    );
+    res.setHeader(
+        'Cache-Control',
+        'public, max-age=300, stale-while-revalidate=60',
+    );
+    res.setHeader(
+        'Vercel-Cache-Tag',
+        `gud-${editionDate}-${edition}-${EDITORIAL_RULESET_VERSION}`,
+    );
+    res.setHeader('X-GUD-Edition', edition);
+    res.setHeader('X-GUD-Edition-Date', editionDate);
+    res.setHeader('X-GUD-Language', language);
+    res.setHeader('X-GUD-Shared-Snapshot', sharedEditionStoreConfigured() ? 'blob' : 'cdn-only');
+    res.setHeader('Content-Language', edition === 'latam' ? 'es-419' : 'en');
+};
+
 export default async function handler(req, res) {
     if (req.method && req.method !== 'GET') {
         res.setHeader('Allow', 'GET');
@@ -580,6 +619,18 @@ export default async function handler(req, res) {
     const newsSources = getNewsSources(edition);
 
     try {
+        const existingEdition = await readDailyEdition({
+            editionDate,
+            edition,
+            rulesetVersion: EDITORIAL_RULESET_VERSION,
+        });
+
+        if (existingEdition) {
+            setEditionHeaders(res, { editionDate, edition, language });
+            res.setHeader('X-GUD-Snapshot-Status', 'hit');
+            return res.status(200).json(existingEdition);
+        }
+
         const results = await fetchSourcesWithConcurrency(
             newsSources,
             editionDate,
@@ -627,6 +678,8 @@ export default async function handler(req, res) {
                     totals.wrongLanguage + source.rejected.wrongLanguage,
                 disqualified:
                     totals.disqualified + source.rejected.disqualified,
+                falsePositive:
+                    totals.falsePositive + source.rejected.falsePositive,
                 noPositiveOutcome:
                     totals.noPositiveOutcome + source.rejected.noPositiveOutcome,
                 belowScore: totals.belowScore + source.rejected.belowScore,
@@ -640,24 +693,7 @@ export default async function handler(req, res) {
         );
         const { start, end } = editionWindow(editionDate);
 
-        res.setHeader(
-            'Vercel-CDN-Cache-Control',
-            'public, max-age=86400, stale-while-revalidate=3600, stale-if-error=604800',
-        );
-        res.setHeader(
-            'Cache-Control',
-            'public, max-age=300, stale-while-revalidate=60',
-        );
-        res.setHeader(
-            'Vercel-Cache-Tag',
-            `gud-${editionDate}-${edition}-${EDITORIAL_RULESET_VERSION}`,
-        );
-        res.setHeader('X-GUD-Edition', edition);
-        res.setHeader('X-GUD-Edition-Date', editionDate);
-        res.setHeader('X-GUD-Language', language);
-        res.setHeader('Content-Language', edition === 'latam' ? 'es-419' : 'en');
-
-        return res.status(200).json({
+        const payload = {
             articles,
             generatedAt: new Date().toISOString(),
             editionDate,
@@ -706,7 +742,22 @@ export default async function handler(req, res) {
                 rejections: rejectionTotals,
                 failedSources,
             },
+        };
+
+        const sharedPayload = await commitDailyEdition({
+            editionDate,
+            edition,
+            rulesetVersion: EDITORIAL_RULESET_VERSION,
+            payload,
         });
+
+        setEditionHeaders(res, { editionDate, edition, language });
+        res.setHeader(
+            'X-GUD-Snapshot-Status',
+            sharedPayload.generatedAt === payload.generatedAt ? 'created' : 'race-winner',
+        );
+
+        return res.status(200).json(sharedPayload);
     } catch (error) {
         console.error('GUD source ingestion error:', error);
         return res.status(500).json({

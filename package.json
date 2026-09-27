@@ -16,7 +16,8 @@
     "react": "latest",
     "react-dom": "latest",
     "rss-parser": "latest",
-    "vite": "latest"
+    "vite": "latest",
+    "@vercel/blob": "^2.8.0"
   },
   "devDependencies": {
     "@eslint/js": "latest",
