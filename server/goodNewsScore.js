@@ -242,6 +242,33 @@ const falsePositiveOutcomePatterns = [
     /\b(?:preliminar(?:es)?|fase temprana|etapa temprana|preprint|sin revisi[oó]n por pares|no revisad[oa] por pares)\b/i,
 ];
 
+// v6.9 false-positive families shared by English and Spanish.
+// These are semantic story-type vetoes, not sentiment penalties.
+const ongoingHarmPatterns = [
+    /\b(?:alert|warning|risk|threat|possible collapse|collapse risk|emergency|contamination|pollution|damage|danger|crisis)\b/i,
+    /\b(?:alerta|advertencia|riesgo|amenaza|posible derrumbe|riesgo de derrumbe|emergencia|contaminaci[oó]n|da[ñn]o|peligro|crisis)\b/i,
+];
+
+const remedialActionPatterns = [
+    /\b(?:orders?|ordered|urges?|urged|announces?|announced|calls? for|launches? an investigation|opens? an investigation|emergency measures?|urgent measures?|action plan|plan to address|steps to address|measures to address)\b/i,
+    /\b(?:ordena|orden[oó]|dispone|dispuso|exige|exigi[oó]|anuncia|anunci[oó]|pide|pidi[oó]|reclama|reclam[oó]|abre una investigaci[oó]n|inicia una investigaci[oó]n|medidas urgentes|medidas de emergencia|plan de acci[oó]n|plan para abordar|medidas para abordar)\b/i,
+];
+
+const personalProfilePatterns = [
+    /\b(?:reflects? on|looks? back on|opens? up about|talks? about|remembers?|recalls?|on (?:his|her|their) life|on (?:his|her|their) career|childhood|personal journey|life story|at age \d{2,3})\b/i,
+    /\b(?:reflexiona sobre|mira hacia atr[aá]s|habla de|recuerda|rememora|confiesa|cuenta su|su infancia|su carrera|su trayectoria|su vida|a sus \d{2,3} a[ñn]os|la ni[ñn]a que fui|el ni[ñn]o que fui)\b/i,
+];
+
+const subjectiveReviewPatterns = [
+    /\b(?:i think|i tried|i tested|i used|my experience|worth the risk|review:)\b.{0,90}\b(?:ai|agent|app|device|product|service|tool|software|gadget)\b/i,
+    /\b(?:creo que|prob[eé]|puse a prueba|us[eé]|mi experiencia|vale el riesgo|rese[ñn]a:)\b.{0,90}\b(?:ia|inteligencia artificial|agente|app|aplicaci[oó]n|dispositivo|producto|servicio|herramienta|software)\b/i,
+];
+
+const conferencePreliminaryPatterns = [
+    /\b(?:new research suggests|study suggests|findings? (?:are|is) being presented|presented at (?:the )?(?:annual )?(?:meeting|conference)|conference abstract|meeting abstract)\b/i,
+    /\b(?:nueva investigaci[oó]n sugiere|estudio sugiere|los hallazgos se presentan|los resultados se presentan|presentad[oa]s? en (?:la )?(?:reuni[oó]n|congreso|conferencia)|resumen de congreso|abstract de congreso)\b/i,
+];
+
 const healthBenefitClaimPatterns = [
     /\b(?:treatment|therapy|drug|medicine|vaccine|procedure|intervention)\b.{0,80}\b(?:reduce|improve|prevent|protect|save|treat|cure|restore|reverse|extend|boost)\b/i,
     /\b(?:tratamiento|terapia|f[aá]rmaco|medicamento|vacuna|procedimiento|intervenci[oó]n)\b.{0,82}\b(?:reduce|mejora|previene|protege|salva|trata|cura|restaura|revierte|prolonga|aumenta)\b/i,
@@ -447,6 +474,47 @@ export const hasFalsePositiveSignal = ({
 
     const preliminary = matchesAny(falsePositiveOutcomePatterns.slice(6), fullContext);
     if (preliminary && category === 'health') return true;
+
+    // Conference abstracts and "research suggests" framing are not treated as
+    // realized health benefits when the headline/deck makes a benefit claim.
+    if (
+        category === 'health' &&
+        matchesAny(conferencePreliminaryPatterns, fullContext) &&
+        (matchesAny(healthBenefitClaimPatterns, mainContext) ||
+            matchesAny(publicBenefitOutcomePatterns, mainContext))
+    ) {
+        return true;
+    }
+
+    // A response to an ongoing harmful situation is not itself good news.
+    // Orders, plans and emergency measures qualify only after a concrete
+    // beneficial result is reported.
+    const remedialOnly =
+        matchesAny(ongoingHarmPatterns, mainContext) &&
+        matchesAny(remedialActionPatterns, mainContext) &&
+        !hasPositiveResolution(mainContext) &&
+        !matchesAny(genericRealizedOutcomePatterns, mainContext) &&
+        !matchesAny(publicBenefitOutcomePatterns, mainContext);
+    if (remedialOnly) return true;
+
+    // First-person product/service reviews are subjective evaluations, not
+    // external positive outcomes.
+    if (matchesAny(subjectiveReviewPatterns, mainContext)) return true;
+
+    // Profiles and interviews remain eligible when they actually report a
+    // substantive external outcome. Autobiographical reflection alone does not.
+    if (matchesAny(personalProfilePatterns, mainContext)) {
+        const categoryPatterns = realizedOutcomeByCategory[category] ?? [];
+        const substantiveExternalOutcome =
+            hasPositiveResolution(mainContext) ||
+            matchesAny(genericRealizedOutcomePatterns, mainContext) ||
+            matchesAny(publicBenefitOutcomePatterns, mainContext) ||
+            matchesAny(categoryPatterns, mainContext) ||
+            matchesAny(spanishRealizedActionPatterns, mainContext) ||
+            matchesAny(spanishScienceKnowledgeGainPatterns, mainContext);
+
+        if (!substantiveExternalOutcome) return true;
+    }
 
     return false;
 };
