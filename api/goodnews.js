@@ -25,6 +25,7 @@ import { editorialGuard } from '../server/classification/editorialGuard.js';
 import { classifyML, getMLStatus } from '../server/classification/mlClassifier.js';
 import { auditShortlist } from '../server/classification/llmAuditor.js';
 import { saveTelemetry } from '../server/learning/telemetryStore.js';
+import { readCuratedEdition } from '../server/learning/curatedEditionStore.js';
 import {
     commitDailyEdition,
     readDailyEdition,
@@ -385,7 +386,8 @@ const buildSourceCandidates = async (source, editionDate, language) => {
         if (exploration.length >= 3 || (ml.confidence ?? 0) < 0.55) return;
         exploration.push({
             id: makeId(language, source.name, title, link), title,
-            url: link,
+            url: link, publishedAt: new Date(item.isoDate ?? item.pubDate).toISOString(),
+            imageCandidates: imageCandidatesFromFeedItem(item, link),
             deck: String(deck || '').slice(0, 360), source: source.name,
             category, mlLabel: ml.label, mlScore: ml.confidence,
             reason, sourceId: source.id,
@@ -631,7 +633,7 @@ const setEditionHeaders = (res, { editionDate, edition, language }) => {
     );
     res.setHeader(
         'Cache-Control',
-        'public, max-age=300, stale-while-revalidate=60',
+        'public, max-age=0, must-revalidate',
     );
     res.setHeader(
         'Vercel-Cache-Tag',
@@ -663,9 +665,12 @@ export default async function handler(req, res) {
         });
 
         if (existingEdition) {
+            // Read-only for every visitor: one shared optional curated snapshot,
+            // generated ONLY on the admin's SAVE (never during public requests).
+            const curated = await readCuratedEdition({ editionDate, edition, rulesetVersion: EDITORIAL_RULESET_VERSION });
             setEditionHeaders(res, { editionDate, edition, language });
-            res.setHeader('X-GUD-Snapshot-Status', 'hit');
-            return res.status(200).json(existingEdition);
+            res.setHeader('X-GUD-Snapshot-Status', curated ? 'curated' : 'hit');
+            return res.status(200).json(curated || existingEdition);
         }
 
         // Visitors must NEVER trigger ingestion or paid processing.
@@ -863,6 +868,7 @@ export default async function handler(req, res) {
             decisions: [...shortlist.map((a) => ({
                 lane: 'shortlist',
                 id: a.id, title: a.title.slice(0, 180), url: a.url,
+                publishedAt: a.publishedAt, imageCandidates: a.imageCandidates,
                 deck: String(a.deck || '').slice(0, 360), source: a.source,
                 category: a.category, ruleScore: a.ruleScore,
                 mlLabel: a.ml.label, mlScore: a.ml.confidence,
@@ -870,7 +876,8 @@ export default async function handler(req, res) {
                 published: articles.some((story) => story.id === a.id),
             })), ...reviewExploration.map((a) => ({
                 lane: 'exploration', id: a.id, title: a.title.slice(0, 180),
-                url: a.url, deck: a.deck, source: a.source, category: a.category,
+                url: a.url, deck: a.deck, publishedAt: a.publishedAt,
+                imageCandidates: a.imageCandidates, source: a.source, category: a.category,
                 ruleScore: null, mlLabel: a.mlLabel, mlScore: a.mlScore,
                 llm: null, published: false, reason: a.reason,
             }))],

@@ -126,10 +126,8 @@ function App() {
 
         const data = (await response.json()) as NewsResponse;
 
-        if (data.articles.length === 0) {
-          throw new Error('Today’s edition is empty.');
-        }
-
+        // A human editor may deliberately withdraw every article. Do not
+        // replace that decision with unreviewed placeholder/fallback stories.
         if (data.edition !== activeEdition) {
           throw new Error('News endpoint returned the wrong GUD edition.');
         }

@@ -2,6 +2,7 @@ import { authorizedAdmin } from '../server/learning/adminAuth.js';
 import { readDailyEdition } from '../server/dailyEditionStore.js';
 import { readTelemetry } from '../server/learning/telemetryStore.js';
 import { getEditionReviews } from '../server/learning/feedbackStore.js';
+import { readCuratedEdition } from '../server/learning/curatedEditionStore.js';
 import { EDITORIAL_RULESET_VERSION, EDITION_LIMIT, EDITION_MIN_TARGET } from '../server/edition.js';
 import { getMLStatus } from '../server/classification/mlClassifier.js';
 
@@ -24,14 +25,25 @@ export default async function handler(req, res) {
   try {
     const editions = {};
     for (const edition of ['english', 'latam']) {
-      const [snapshot, telemetry, reviews] = await Promise.all([
+      const [baseSnapshot, curatedSnapshot, originalTelemetry, reviews] = await Promise.all([
         readDailyEdition({ editionDate: selected, edition, rulesetVersion: EDITORIAL_RULESET_VERSION }),
+        readCuratedEdition({ editionDate: selected, edition, rulesetVersion: EDITORIAL_RULESET_VERSION }),
         readTelemetry(selected, edition),
         getEditionReviews(selected, edition),
       ]);
+      const snapshot = curatedSnapshot || baseSnapshot;
+      const liveIds = new Set((snapshot?.articles || []).map((item) => item.id));
+      const reviewedUrls = new Map(reviews.filter((row) => row.url).map((row) => [row.id, row.url]));
+      const telemetry = originalTelemetry ? {
+        ...originalTelemetry,
+        decisions: (originalTelemetry.decisions || []).map((item) => ({
+          ...item, url: item.url || reviewedUrls.get(item.id), published: liveIds.has(item.id),
+        })),
+      } : null;
       editions[edition] = {
         status: snapshot ? 'ready' : 'not_generated',
         generatedAt: snapshot?.generatedAt || null,
+        curatedAt: snapshot?.curatedAt || null,
         count: snapshot?.count ?? 0,
         sourcePool: snapshot?.sourcePool ?? null,
         candidateCount: snapshot?.candidateCount ?? null,

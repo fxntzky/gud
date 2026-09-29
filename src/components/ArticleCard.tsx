@@ -123,7 +123,7 @@ export function ArticleCard({
 
         <div className="article-card__meta">
           <span>{categoryLabel(article.category, edition)}</span>
-          <span>{formatRelativeTime(article.publishedAt, edition)}</span>
+          {article.publishedAt && <span>{formatRelativeTime(article.publishedAt, edition)}</span>}
         </div>
 
         <h2>
@@ -145,7 +145,7 @@ export function ArticleCard({
         {article.excerpt && <p className="article-card__excerpt">{article.excerpt}</p>}
 
         <div className="article-card__source">
-          <time dateTime={article.publishedAt}>{formatDate(article.publishedAt, edition)}</time>
+          {article.publishedAt && <time dateTime={article.publishedAt}>{formatDate(article.publishedAt, edition)}</time>}
 
           {!isPlaceholder && (
             <a

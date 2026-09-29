@@ -44,7 +44,7 @@ type Telemetry = {
   decisions: Decision[];
 };
 type EditionState = {
-  status: string; count: number; generatedAt: string | null;
+  status: string; count: number; generatedAt: string | null; curatedAt?: string | null;
   candidateCount: number | null; sourcePool: number | null;
   telemetry: Telemetry | null; reviews: Record<string, ReviewLabel>;
   articles?: { id: string; url?: string }[];
@@ -96,6 +96,10 @@ export function ControlRoom() {
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [drafts, setDrafts] = useState<ReviewDrafts>(readDrafts);
+  const [legacyUrls, setLegacyUrls] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(sessionStorage.getItem('gud:legacy-source-urls:v1') || '{}') as Record<string, string>; }
+    catch { return {}; }
+  });
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
@@ -105,6 +109,10 @@ export function ControlRoom() {
   useEffect(() => {
     try { sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(drafts)); } catch { /* browser storage disabled */ }
   }, [drafts]);
+
+  useEffect(() => {
+    try { sessionStorage.setItem('gud:legacy-source-urls:v1', JSON.stringify(legacyUrls)); } catch { /* private mode */ }
+  }, [legacyUrls]);
 
   useEffect(() => {
     if (!Object.values(drafts).some((batch) => Object.keys(batch).length > 0)) return;
@@ -195,7 +203,21 @@ export function ControlRoom() {
 
   const saveReview = async () => {
     if (!authorization || saving || busy || !pendingCount) return;
-    const changes = Object.entries(activeDraft).map(([id, label]) => ({ id, label }));
+    const changes = Object.entries(activeDraft).map(([id, label]) => ({
+      id, label,
+      ...(label === 'constructive' && legacyUrls[`${draftKey}:${id}`]?.trim()
+        ? { sourceUrl: legacyUrls[`${draftKey}:${id}`].trim() } : {}),
+    }));
+    const missingOriginal = changes.find(({ id, label, sourceUrl }) => {
+      if (label !== 'constructive') return false;
+      const item = stats?.decisions.find((entry) => entry.id === id);
+      if (!item || editorialSourceLink(item, current?.articles).label !== 'FIND SOURCE ↗') return false;
+      return !safeArticleUrl(sourceUrl);
+    });
+    if (missingOriginal) {
+      setError('Paste the original article URL for the selected YES story before saving.');
+      return;
+    }
     setSaving(true);
     setError('');
     setSuccess('');
@@ -209,7 +231,7 @@ export function ControlRoom() {
         const detail = await response.json().catch(() => null) as { error?: string } | null;
         throw new Error(detail?.error || `Review not saved (${response.status}).`);
       }
-      const result = await response.json() as { saved: number };
+      const result = await response.json() as { saved: number; publication?: { count: number; curatedAt: string; articles: { id: string; url: string }[] } };
       if (result.saved !== changes.length) throw new Error('Unexpected save confirmation. Please reload to verify.');
       setData((previous) => {
         if (!previous || previous.date !== date) return previous;
@@ -219,9 +241,21 @@ export function ControlRoom() {
           if (change.label === 'clear') delete reviews[change.id];
           else reviews[change.id] = change.label;
         }
+        const publication = result.publication;
+        const liveIds = new Set(publication?.articles.map((item) => item.id) || []);
+        const telemetry = publication && entry.telemetry ? {
+          ...entry.telemetry,
+          decisions: entry.telemetry.decisions.map((item) => ({ ...item, published: liveIds.has(item.id) })),
+        } : entry.telemetry;
         return {
           ...previous,
-          editions: { ...previous.editions, [edition]: { ...entry, reviews } },
+          editions: { ...previous.editions, [edition]: {
+            ...entry, reviews, telemetry,
+            ...(publication ? {
+              count: publication.count, curatedAt: publication.curatedAt,
+              articles: publication.articles,
+            } : {}),
+          } },
         };
       });
       setDrafts((previous) => {
@@ -229,7 +263,12 @@ export function ControlRoom() {
         delete updated[draftKey];
         return updated;
       });
-      setSuccess(`${result.saved} editorial change${result.saved === 1 ? '' : 's'} saved. Your review is now finalised for training export.`);
+      setLegacyUrls((previous) => {
+        const next = { ...previous };
+        for (const change of changes) delete next[`${draftKey}:${change.id}`];
+        return next;
+      });
+      setSuccess(`${result.saved} editorial change${result.saved === 1 ? '' : 's'} saved. Public edition updated (${result.publication?.count ?? '—'} articles). CDN refresh requested.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to save review. Your draft has been preserved.');
     } finally {
@@ -273,7 +312,7 @@ export function ControlRoom() {
               <span className="control-room__eyebrow">RULESET {data.version} · {edition.toUpperCase()}</span>
               <h2>{current?.status === 'ready' ? 'Edition generated.' : 'Not generated yet.'}</h2>
               <p>Edition target {data.editionMinTarget}–{data.editionLimit}. Quality is never padded to reach the minimum. Times shown in UTC.</p>
-              <p className="control-room__eyebrow">{current?.generatedAt ? `GENERATED ${new Date(current.generatedAt).toLocaleString('en-GB', { timeZone: 'UTC' })} UTC` : 'NO SNAPSHOT'}</p>
+              <p className="control-room__eyebrow">{current?.generatedAt ? `GENERATED ${new Date(current.generatedAt).toLocaleString('en-GB', { timeZone: 'UTC' })} UTC${current.curatedAt ? ` · CURATED ${new Date(current.curatedAt).toLocaleString('en-GB', { timeZone: 'UTC' })} UTC` : ''}` : 'NO SNAPSHOT'}</p>
             </section>
             <section className="control-room__metrics" aria-label="Ingestion metrics">
               {[
@@ -318,7 +357,7 @@ export function ControlRoom() {
             </div>
             <section className="control-room__reviews" aria-labelledby="review-heading">
               <div className="control-room__reviews-heading"><div><span className="control-room__eyebrow">EDITORIAL AUDIT LOG</span><h2 id="review-heading">Review the decisions.</h2></div><span>{stats?.decisions?.length ?? 0} ARTICLES</span></div>
-              <p>Read the full source first. Your choices remain a local draft until you press SAVE EDITORIAL REVIEW. IRRELEVANT is positive news with low editorial priority, not a false positive.</p>
+              <p>Read the full source first. Your choices remain a local draft until SAVE. YES publishes or retains a story, NO removes it, IRRELEVANT removes it but remains positive for training. An unreviewed day stays automatic. Changes apply to today's shared edition only.</p>
               {(stats?.decisions || []).map((item) => {
                 const sourceLink = editorialSourceLink(item, current?.articles);
                 return <article className="control-room__review" key={item.id}>
@@ -329,6 +368,23 @@ export function ControlRoom() {
                   <a className="control-room__source-link" href={sourceLink.href} target="_blank" rel="noopener noreferrer" aria-label={`${sourceLink.label.replace(' ↗', '')}: ${item.title}`}>
                     {sourceLink.label}
                   </a>
+                  {sourceLink.label === 'FIND SOURCE ↗' && selectedLabel(item.id) === 'constructive' && !item.published && (
+                    <label className="control-room__legacy-source">
+                      ORIGINAL SOURCE URL REQUIRED TO PUBLISH (OLDER AUDIT)
+                      <input type="url" inputMode="url" placeholder="https://publisher.com/original-article"
+                        value={legacyUrls[`${draftKey}:${item.id}`] || ''}
+                        onChange={(event) => {
+                          setLegacyUrls((prior) => ({ ...prior, [`${draftKey}:${item.id}`]: event.target.value }));
+                          // Editing an URL for a previously saved YES must count
+                          // as a pending SAVE even if its label has not changed.
+                          setDrafts((prior) => ({ ...prior, [draftKey]: {
+                            ...(prior[draftKey] || {}), [item.id]: 'constructive',
+                          } }));
+                        }}
+                        disabled={saving || busy} />
+                      <small>Open FIND SOURCE, confirm the article, then paste its actual URL. No new ingestion is triggered.</small>
+                    </label>
+                  )}
                   <div className="control-room__review-tags">
                     <span>RULE: {item.ruleScore ?? 'NOT ELIGIBLE'}</span>
                     <span>ML: {item.mlLabel} {item.mlScore === null ? '' : `(${(item.mlScore * 100).toFixed(0)}% raw score)`}</span>

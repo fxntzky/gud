@@ -17,7 +17,7 @@ export async function saveEditorialReviewBatch({ editionDate, edition, changes }
   const reviewedAt = new Date().toISOString();
   const reviews = changes.map(({ article, label }) => ({
     editionDate, edition, id: article.id, label,
-    title: article.title, deck: article.deck || '', source: article.source,
+    title: article.title, deck: article.deck || '', source: article.source, url: article.url,
     previous: { mlLabel: article.mlLabel, llm: article.llm, published: article.published },
     reviewedAt, origin: 'human_editor',
   }));

@@ -11,7 +11,10 @@ export function validateReviewBatch(reviews, eligibleIds) {
   for (const row of reviews) {
     if (!row || typeof row !== 'object' || Array.isArray(row) ||
       typeof row.id !== 'string' || !/^[a-f0-9]{40}$/.test(row.id) ||
-      !isReviewLabel(row.label) || !eligibleIds.has(row.id) || seen.has(row.id)) {
+      !isReviewLabel(row.label) || !eligibleIds.has(row.id) || seen.has(row.id) ||
+      (row.sourceUrl !== undefined && (row.label !== 'constructive' ||
+        typeof row.sourceUrl !== 'string' || row.sourceUrl.length > 2048 ||
+        !/^https?:\/\/[^\s]+$/i.test(row.sourceUrl)))) {
       return { valid: false, error: 'Invalid, duplicate or unknown editorial review.' };
     }
     seen.add(row.id);

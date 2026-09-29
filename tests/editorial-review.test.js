@@ -61,3 +61,16 @@ test('IRRELEVANT trains positive classification but low editorial relevance', ()
   assert.equal(toTrainingRow(row(a, 'clear', '2026-09-29T16:00:00.000Z')), null);
   assert.equal(toTrainingRow(row(a, 'uncertain', '2026-09-29T16:00:00.000Z')), null);
 });
+
+
+test('historical source URL accepts only sensible HTTP(S) input on YES', () => {
+  assert.equal(validateReviewBatch([
+    { id: a, label: 'constructive', sourceUrl: 'https://www.unesco.org/en/articles/example' },
+  ], ids).valid, true);
+  assert.equal(validateReviewBatch([
+    { id: a, label: 'constructive', sourceUrl: 'javascript:alert(1)' },
+  ], ids).valid, false);
+  assert.equal(validateReviewBatch([
+    { id: a, label: 'not_constructive', sourceUrl: 'https://example.org/story' },
+  ], ids).valid, false);
+});

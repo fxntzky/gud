@@ -121,3 +121,28 @@
     &__save-button { width: 100%; }
   }
 }
+
+// Source confirmation for legacy review entries whose original telemetry lacks URL.
+.control-room__legacy-source {
+  display: grid;
+  gap: 0.4rem;
+  max-width: 100%;
+  margin: 0.75rem 0;
+  font-size: 0.7rem;
+  letter-spacing: 0.035em;
+
+  input {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 0.65rem;
+    color: inherit;
+    background: transparent;
+    border: 1px solid currentColor;
+    border-radius: 2px;
+    font: inherit;
+    font-size: 0.85rem;
+    letter-spacing: 0;
+  }
+  small { opacity: 0.68; line-height: 1.4; }
+}
