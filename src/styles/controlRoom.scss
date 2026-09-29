@@ -73,6 +73,12 @@
     p { font-size: 12px; color: #555; line-height: 1.4; margin: 6px 0; }
     .control-room__reason { font-size: 11px; font-style: italic; }
   }
+  &__source-link { display: inline-flex; align-items: center; margin-top: 10px; padding-bottom: 3px;
+    border-bottom: 1px solid currentColor; font-size: 10px; font-weight: 700; letter-spacing: .055em;
+    color: var(--cr-ink); text-transform: uppercase;
+    &:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
+    &:hover { opacity: .6; }
+  }
   &__review-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px;
     span { display: inline-block; font-size: 9px; border: 1px solid var(--cr-rule); padding: 5px 6px; text-transform: uppercase; }
   }
@@ -84,4 +90,34 @@
   &__footer { margin: 50px 0 20px; border-top: 2px solid; padding: 14px 0; font-size: 9px; letter-spacing: .07em; font-weight: 700; }
   @media(max-width: 1000px) { &__metrics { grid-template-columns: repeat(3,minmax(0,1fr)); > div:nth-child(3) { border-right: 0; } > div:nth-child(-n+3) { border-bottom: 1px solid var(--cr-rule); } } &__columns { grid-template-columns: 1fr; } &__panel > p { min-height: 0; } }
   @media(max-width: 600px) { &__header { align-items: start; flex-direction: column; } &__metrics { grid-template-columns: repeat(2,minmax(0,1fr)); > div:nth-child(odd) { border-right: 1px solid var(--cr-rule); } > div:nth-child(even) { border-right: 0; } > div:not(:nth-last-child(-n+2)) { border-bottom: 1px solid var(--cr-rule); } } &__review { grid-template-columns: 1fr; gap: 14px; } &__review-actions { max-width: 100%; } }
+}
+
+// One explicit commit for the whole editorial review. No per-article autosave.
+.control-room {
+  &__review-actions {
+    max-width: 310px;
+    .control-room__review-state { display: block; width: 100%; margin-top: 5px; font-size: 9px; letter-spacing: .06em; color: #686257; }
+    button { min-width: 45px; }
+  }
+  &__save-bar {
+    position: sticky; bottom: 0; z-index: 5;
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+    gap: 20px; border: 1px solid var(--cr-ink); background: var(--cr-paper);
+    padding: 16px 20px; margin-top: 26px; box-shadow: 0 -9px 22px rgba(0,0,0,.045);
+  }
+  &__save-info { flex: 1; min-width: 180px; max-width: 550px; display: grid; gap: 5px;
+    strong { font-size: 13px; font-variant-numeric: tabular-nums; }
+    > span { font-size: 10px; font-weight: 700; letter-spacing: .055em; color: #58554e; }
+    small { font-size: 10px; line-height: 1.4; color: #686257; }
+  }
+  &__progress { height: 4px; width: 100%; background: #dad5c9; overflow: hidden;
+    > span { display: block; height: 100%; background: #2f6f53; transition: width .16s ease; }
+  }
+  &__save-button { background: var(--cr-ink); color: var(--cr-paper); border: 1px solid var(--cr-ink);
+    min-height: 43px; padding: 12px 17px; font-size: 11px; font-weight: 800; letter-spacing: .055em; }
+  &__save-button:disabled { opacity: .45; cursor: default; }
+  @media(max-width: 600px) {
+    &__save-bar { padding: 12px; gap: 12px; }
+    &__save-button { width: 100%; }
+  }
 }

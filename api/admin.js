@@ -37,7 +37,9 @@ export default async function handler(req, res) {
         candidateCount: snapshot?.candidateCount ?? null,
         telemetry,
         reviews: Object.fromEntries(reviews.map((row) => [row.id, row.label])),
-        articles: (snapshot?.articles || []).map(({ id, title, source, category }) => ({ id, title, source, category })),
+        // The public snapshot retains article URLs. This lets existing
+        // shortlists link to their sources even before telemetry has URLs.
+        articles: (snapshot?.articles || []).map(({ id, title, source, category, url }) => ({ id, title, source, category, url })),
       };
     }
     return res.status(200).json({

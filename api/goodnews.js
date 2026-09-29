@@ -385,6 +385,7 @@ const buildSourceCandidates = async (source, editionDate, language) => {
         if (exploration.length >= 3 || (ml.confidence ?? 0) < 0.55) return;
         exploration.push({
             id: makeId(language, source.name, title, link), title,
+            url: link,
             deck: String(deck || '').slice(0, 360), source: source.name,
             category, mlLabel: ml.label, mlScore: ml.confidence,
             reason, sourceId: source.id,
@@ -861,14 +862,15 @@ export default async function handler(req, res) {
             // A bounded audit log. No credentials or unrestricted feed dumps.
             decisions: [...shortlist.map((a) => ({
                 lane: 'shortlist',
-                id: a.id, title: a.title.slice(0, 180), deck: String(a.deck || '').slice(0, 360), source: a.source,
+                id: a.id, title: a.title.slice(0, 180), url: a.url,
+                deck: String(a.deck || '').slice(0, 360), source: a.source,
                 category: a.category, ruleScore: a.ruleScore,
                 mlLabel: a.ml.label, mlScore: a.ml.confidence,
                 llm: decisions.get(a.id) ?? (llm.enabled ? { eligible: null, reason: 'not_audited' } : null),
                 published: articles.some((story) => story.id === a.id),
             })), ...reviewExploration.map((a) => ({
                 lane: 'exploration', id: a.id, title: a.title.slice(0, 180),
-                deck: a.deck, source: a.source, category: a.category,
+                url: a.url, deck: a.deck, source: a.source, category: a.category,
                 ruleScore: null, mlLabel: a.mlLabel, mlScore: a.mlScore,
                 llm: null, published: false, reason: a.reason,
             }))],

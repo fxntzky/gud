@@ -1,26 +1,31 @@
 import { randomUUID } from 'node:crypto';
 import { get, list, put } from '@vercel/blob';
+import { flattenReviewRecords, latestReviewRecords, toTrainingRow } from './reviewLogic.js';
 
-// Append-only human review records: no concurrent read-modify-write race.
-// Public visitors cannot access this private namespace.
+// Append-only batches: one private Blob write per SAVE, no shared-state overwrite.
+// Keep the v7 prefix to retain reviews saved by the previous per-item UI.
 const PREFIX = 'gud/private-reviews/v7/';
-const keyFor = (date, edition, id) => `${PREFIX}${date}/${edition}/${id}/`;
+const keyFor = (date, edition) => `${PREFIX}${date}/${edition}/`;
+
 const decode = async (pathname) => {
   const blob = await get(pathname, { access: 'private', useCache: false });
   if (blob?.statusCode !== 200 || !blob.stream) return null;
   return JSON.parse(await new Response(blob.stream).text());
 };
-export async function saveEditorialReview(review) {
-  const key = `${keyFor(review.editionDate, review.edition, review.id)}${Date.now()}-${randomUUID()}.json`;
-  const payload = {
-    ...review,
-    reviewedAt: new Date().toISOString(),
-    origin: 'human_editor',
-  };
-  await put(key, JSON.stringify(payload), {
+
+export async function saveEditorialReviewBatch({ editionDate, edition, changes }) {
+  const reviewedAt = new Date().toISOString();
+  const reviews = changes.map(({ article, label }) => ({
+    editionDate, edition, id: article.id, label,
+    title: article.title, deck: article.deck || '', source: article.source,
+    previous: { mlLabel: article.mlLabel, llm: article.llm, published: article.published },
+    reviewedAt, origin: 'human_editor',
+  }));
+  const key = `${keyFor(editionDate, edition)}batch-${Date.now()}-${randomUUID()}.json`;
+  await put(key, JSON.stringify({ kind: 'editorial_review_batch', editionDate, edition, reviewedAt, reviews }), {
     access: 'private', addRandomSuffix: false, contentType: 'application/json',
   });
-  return payload;
+  return reviews;
 }
 
 async function readAll(prefix, cap) {
@@ -31,30 +36,18 @@ async function readAll(prefix, cap) {
     blobs.push(...page.blobs);
     cursor = page.hasMore ? page.cursor : undefined;
   } while (cursor && blobs.length < cap);
-  const records = [];
-  // Bounded concurrency to prevent large simultaneous Blob requests.
+  const documents = [];
   for (let i = 0; i < blobs.length; i += 8) {
     const group = await Promise.all(blobs.slice(i, i + 8).map((b) => decode(b.pathname).catch(() => null)));
-    records.push(...group.filter(Boolean));
+    documents.push(...group.filter(Boolean));
   }
-  const latest = new Map();
-  for (const row of records) {
-    const key = `${row.editionDate}:${row.edition}:${row.id}`;
-    if (!latest.has(key) || row.reviewedAt > latest.get(key).reviewedAt) latest.set(key, row);
-  }
-  return [...latest.values()];
+  return latestReviewRecords(flattenReviewRecords(documents));
 }
 
-export const getEditionReviews = async (date, edition) =>
-  readAll(`${PREFIX}${date}/${edition}/`, 80);
+export const getEditionReviews = (date, edition) => readAll(keyFor(date, edition), 80);
 
-// Weekly export; bounded rather than scanning the entire archive on every visit.
+// Weekly export: classifier label and editorial taste are separate fields.
 export const getReviewedTrainingRows = async () => {
-  const records = await readAll(PREFIX, 1500);
-  return records.filter((row) =>
-    ['constructive', 'not_constructive'].includes(row.label) &&
-    typeof row.title === 'string' && row.title.trim().length > 0,
-  ).map(({ id, title, deck, label, reviewedAt }) => ({
-    id, title, deck: deck || '', label, reviewedAt, origin: 'human_editor',
-  }));
+  const rows = await readAll(PREFIX, 1500);
+  return rows.map(toTrainingRow).filter(Boolean);
 };
