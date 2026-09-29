@@ -1,0 +1,35 @@
+{
+  "observed": [
+    {
+      "id": "gud-screen-2026-09-29-military",
+      "provenance": "User-supplied screenshot of previously deployed GUD edition",
+      "title": "Ucrania captura a más de 250 soldados rusos en la Operación Vivaldi en Donetsk",
+      "deck": "El ejército ucranio cifra en 176 los kilómetros cuadrados recuperados durante la exitosa contraofensiva en el sector de Lyman, en la franja oriental ucrania",
+      "expectedVeto": "military_advantage"
+    },
+    {
+      "id": "gud-screen-2026-09-29-extreme-climate",
+      "provenance": "User-supplied screenshot of previously deployed GUD edition",
+      "title": "España registró en 2025 el nivel de extremos climáticos más alto desde 1961, según un estudio",
+      "deck": "España registró en 2025 el nivel de extremos climáticos más alto desde 1961, de acuerdo con el Índice Climático Actuarial Español, que combina indicadores climáticos para cuantificar estos sucesos.",
+      "expectedVeto": "environmental_deterioration"
+    }
+  ],
+  "negativeVariants": [
+    {"title":"El ejército captura a 70 soldados del bando rival", "expectedVeto":"military_advantage"},
+    {"title":"La armada apresa a treinta combatientes enemigos", "expectedVeto":"military_advantage"},
+    {"title":"Troops capture 45 enemy soldiers in a successful operation", "expectedVeto":"military_advantage"},
+    {"title":"España alcanza un récord de eventos climáticos extremos", "expectedVeto":"environmental_deterioration"},
+    {"title":"Fenómenos meteorológicos extremos registran su máximo histórico", "expectedVeto":"environmental_deterioration"},
+    {"title":"Un estudio detecta un récord de fenómenos climáticos extremos", "expectedVeto":"environmental_deterioration"},
+    {"title":"Extreme weather events reach their highest level in decades", "expectedVeto":"environmental_deterioration"},
+    {"title":"New record of climate extremes reported by researchers", "expectedVeto":"environmental_deterioration"}
+  ],
+  "constructiveControls": [
+    {"title":"Tras la sequía, restauran un humedal y regresa la fauna"},
+    {"title":"Restauran un humedal tras extremos climáticos récord"},
+    {"title":"Scientists reopen a school after record extreme weather"},
+    {"title":"Volunteers rebuild homes for displaced families"},
+    {"title":"Rescatan a civiles y les brindan asistencia humanitaria"}
+  ]
+}

@@ -1,5 +1,26 @@
 // Editorial direction guards, applied before lexical positive scoring.
 // These are conservative high-certainty vetoes, not a universal semantic model.
+
+// These title-only signals are checked BEFORE the optional article-head fetch.
+// They describe reusable event relations, never a country, date, or publisher.
+// Normalizing accents also avoids JS \b treating a final accented vowel as a
+// non-word character (e.g. "capturó", "récord").
+const normalizeHeadline = (value) => String(value ?? '')
+  .normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+const climateMetric = String.raw`(?:extremos?\s+climaticos?|(?:fenomenos?|eventos?)\s+(?:(?:climaticos?|meteorologicos?)\s+)?extremos?|extreme\s+weather(?:\s+events?)?|climate\s+extremes?)`;
+const harmfulIncrease = String.raw`(?:mas\s+alt[oa]s?|mayor(?:es)?|maxim[oa]s?|record(?:[- ]breaking)?|aument(?:a|aron|o)|increment(?:a|aron|o)|highest|increas(?:e|es|ed|ing)|rising|surge(?:s|d)?|more\s+frequent)`;
+
+const headlineOnlyPatterns = [
+  // A military actor capturing opposing combatants is not, by itself,
+  // constructive progress. This covers title-only RSS feeds as well.
+  ['military_advantage', /\b(?:captur(?:a|an|aron|o)|apres(?:a|an|aron|o)|capture(?:s|d)?|seize(?:s|d)?|detain(?:s|ed)?)\b.{0,100}\b(?:soldad[oa]s?|combatientes?|prisioneros?|troops?|soldiers?|fighters?|prisoners?)\b/i],
+  // The headline's primary news is increased harmful climate extremes,
+  // regardless of whether the publication describes it as a scientific record.
+  ['environmental_deterioration', new RegExp(String.raw`\b${climateMetric}\b.{0,80}\b${harmfulIncrease}\b`, 'i')],
+  ['environmental_deterioration', new RegExp(String.raw`\b(?:record|highest|aumento|incremento|maximo|nivel\s+mas\s+alto)\b.{0,70}\b${climateMetric}\b`, 'i')],
+];
+
 const patterns = [
   ['military_advantage', /\b(?:forces?|military|army|troops?|soldiers?|fuerzas?|ej[eé]rcito|tropas?)\b.{0,80}\b(?:restor(?:ed|es?)|regain(?:ed|s)?|recover(?:ed|s)?|recupera(?:n|ron)?|restaur(?:a|aron))\b.{0,22}\b(?:control|positions?|territor(?:y|ies)|posiciones?|territorio|control territorial)\b/i],
   ['military_advantage', /\b(?:military|army|forces?|troops?|navy|air force|soldiers?|batallions?|brigades?|militares?|ej[eé]rcito|tropas?|soldados?|fuerzas armadas|armada)\b.{0,100}\b(?:win(?:s|ning)?|victor(?:y|ies)|capture[sd]?|seiz(?:e|ed|es)|retak(?:e|es|en)|strike[sd]?|deploy(?:s|ed)?|advanc(?:e|ed|es)|conquer(?:s|ed)?|victoria|ganan?|captur(?:a|an|aron)|recuperan? posiciones|toman? territorio|despliegan?|atacan?|avanzan?)\b/i],
@@ -14,6 +35,18 @@ const patterns = [
 ];
 
 export function editorialGuard({ title = '', deck = '' } = {}) {
+  const headline = normalizeHeadline(title);
+  for (const [reason, pattern] of headlineOnlyPatterns) {
+    const match = pattern.exec(headline);
+    if (!match) continue;
+    if (reason === 'environmental_deterioration') {
+      // An explicitly historical "after/tras record weather" clause can be
+      // background to a constructive restoration, not the main news event.
+      const beforeMatch = headline.slice(0, match.index);
+      if (/\b(?:after|following|tras|despues de)\b.{0,65}$/.test(beforeMatch)) continue;
+    }
+    return reason;
+  }
   // Title is the dominant event. Deck can help identify its direction but may
   // mention unrelated negatives; match across title + short deck only.
   const main = `${title} ${String(deck).slice(0, 220)}`;
