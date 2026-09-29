@@ -58,6 +58,7 @@ export interface NewsResponse {
   language: NewsLanguage;
   issueNumber: number;
   count: number;
+  editionMinTarget?: number;
   editionLimit: number;
   editorialRulesetVersion?: string;
   uniqueSources: number;

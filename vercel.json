@@ -1,9 +1,16 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/goodnews.js": {
-      "maxDuration": 120,
-      "includeFiles": "server/**"
-    }
-  }
+    "api/goodnews.js": { "maxDuration": 120, "includeFiles": "server/**" },
+    "api/cron-english.js": { "maxDuration": 120, "includeFiles": "server/**" },
+    "api/cron-latam.js": { "maxDuration": 120, "includeFiles": "server/**" },
+    "api/admin.js": { "maxDuration": 20, "includeFiles": "server/**" },
+    "api/admin-feedback.js": { "maxDuration": 20, "includeFiles": "server/**" },
+    "api/training-export.js": { "maxDuration": 60, "includeFiles": "server/**" }
+  },
+  "rewrites": [{ "source": "/control", "destination": "/index.html" }],
+  "crons": [
+    { "path": "/api/cron-english", "schedule": "0 7 * * *" },
+    { "path": "/api/cron-latam", "schedule": "15 7 * * *" }
+  ]
 }

@@ -27,8 +27,8 @@ export const editionCopy = {
     footerLead: 'Go outside.',
     footerReturn: 'Come back tomorrow.',
     footerSource: 'One story per source. No infinite scroll.',
-    footerRules: 'Deterministic editorial rules · no generative AI.',
-    fallback: 'Local preview · run Vercel Dev to load today’s RSS edition.',
+    footerRules: 'Hybrid editorial classification · bounded AI audit.',
+    fallback: 'Shared edition not available yet. No reader-triggered ingestion.',
   },
   latam: {
     name: 'GUD Hispanoamérica',
@@ -46,7 +46,7 @@ export const editionCopy = {
     footerLead: 'Sal afuera.',
     footerReturn: 'Vuelve mañana.',
     footerSource: 'Una historia por fuente. Sin scroll infinito.',
-    footerRules: 'Reglas editoriales deterministas · sin IA generativa.',
-    fallback: 'Vista local · ejecuta Vercel Dev para cargar la edición RSS de hoy.',
+    footerRules: 'Clasificación editorial híbrida · auditoría de IA limitada.',
+    fallback: 'Edición compartida aún no disponible. La lectura no dispara ingestas.',
   },
 } as const;

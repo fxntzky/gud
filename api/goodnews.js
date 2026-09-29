@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
     EDITION_LIMIT,
+    EDITION_MIN_TARGET,
     EDITORIAL_RULESET_VERSION,
     FIRST_EDITION_DATE,
 } from '../server/edition.js';
@@ -20,6 +21,10 @@ import {
     getNewsSources,
 } from '../server/newsSources.js';
 import { fetchSourceItems } from '../server/sourceAdapters.js';
+import { editorialGuard } from '../server/classification/editorialGuard.js';
+import { classifyML, getMLStatus } from '../server/classification/mlClassifier.js';
+import { auditShortlist } from '../server/classification/llmAuditor.js';
+import { saveTelemetry } from '../server/learning/telemetryStore.js';
 import {
     commitDailyEdition,
     readDailyEdition,
@@ -27,6 +32,7 @@ import {
 } from '../server/dailyEditionStore.js';
 
 const MIN_SCORE = 2;
+const SHORTLIST_LIMIT = 18; // ONLY these may reach an optional LLM audit.
 const MAX_LOOKBACK_HOURS = 72;
 const SELECTION_WINDOWS_HOURS = [24, MAX_LOOKBACK_HOURS];
 const SOURCE_CONCURRENCY = 30;
@@ -44,6 +50,8 @@ const emptyRejections = () => ({
     falsePositive: 0,
     noPositiveOutcome: 0,
     belowScore: 0,
+    editorialGuard: 0,
+    ml: 0,
 });
 
 const cleanText = (value) => {
@@ -359,6 +367,9 @@ const toArticle = ({
     publisherDomain: _publisherDomain,
     sourcePriority: _sourcePriority,
     titleTokens: _titleTokens,
+    deck: _deck,
+    ml: _ml,
+    ruleScore: _ruleScore,
     ...article
 }) => article;
 
@@ -366,6 +377,19 @@ const buildSourceCandidates = async (source, editionDate, language) => {
     const sourceItems = await fetchSourceItems(source);
     const rejected = emptyRejections();
     const candidates = [];
+    const exploration = [];
+    let mlScored = 0;
+    const captureExploration = ({ item, title, link, deck, category, ml, reason }) => {
+        // A few borderline rejects are retained for HUMAN review only.
+        // This lane never reaches the paid LLM or the public edition.
+        if (exploration.length >= 3 || (ml.confidence ?? 0) < 0.55) return;
+        exploration.push({
+            id: makeId(language, source.name, title, link), title,
+            deck: String(deck || '').slice(0, 360), source: source.name,
+            category, mlLabel: ml.label, mlScore: ml.confidence,
+            reason, sourceId: source.id,
+        });
+    };
 
     for (const item of sourceItems) {
         const title = cleanText(item.title);
@@ -394,7 +418,16 @@ const buildSourceCandidates = async (source, editionDate, language) => {
             continue;
         }
 
+        // Direction-specific veto is evaluated before generic positive vocabulary.
+        if (editorialGuard({ title })) {
+            rejected.editorialGuard += 1;
+            continue;
+        }
         const { deck, excerpt } = await resolveEditorialContext(item, link);
+        if (editorialGuard({ title, deck })) {
+            rejected.editorialGuard += 1;
+            continue;
+        }
         const searchableText = [title, deck, excerpt]
             .filter(Boolean)
             .join(' ');
@@ -405,41 +438,38 @@ const buildSourceCandidates = async (source, editionDate, language) => {
         }
 
         const category = classifyCategory(searchableText, source.category);
+        const ml = classifyML({ title, deck });
+        mlScored += 1;
+        const mode = getMLStatus().mode;
+        const input = { title, deck, excerpt, category };
 
-        if (
-            hasFalsePositiveSignal({
-                title,
-                deck,
-                excerpt,
-                category,
-            })
-        ) {
+        if (hasFalsePositiveSignal(input)) {
             rejected.falsePositive += 1;
+            captureExploration({ item, title, link, deck, category, ml, reason: 'legacy_false_positive' });
             continue;
         }
 
-        // v6.8: eligibility and ranking are separate. Every story must first
-        // describe a realized, desirable outcome in its title/deck. Scoring then
-        // ranks the eligible stories instead of turning positive vocabulary into
-        // an admission ticket.
-        if (
-            !hasQualifyingOutcome({
-                title,
-                deck,
-                excerpt,
-                category,
-            })
-        ) {
+        // Lexical eligibility is a baseline, not a permanent ceiling. A future
+        // independently validated local model may rescue unseen constructions.
+        // The synthetic bootstrap cannot admit them into the edition.
+        const qualifying = hasQualifyingOutcome(input);
+        const ruleScore = scoreGoodNews(searchableText, title, deck);
+        const mlRescue = mode === 'validated-filter' && (ml.confidence ?? 0) >= 0.93;
+        if (!qualifying && !mlRescue) {
             rejected.noPositiveOutcome += 1;
+            captureExploration({ item, title, link, deck, category, ml, reason: 'missing_legacy_outcome' });
             continue;
         }
-
-        const score = scoreGoodNews(searchableText, title, deck);
-        if (score < MIN_SCORE) {
+        if (ruleScore < MIN_SCORE && !mlRescue) {
             rejected.belowScore += 1;
+            captureExploration({ item, title, link, deck, category, ml, reason: 'below_rule_score' });
             continue;
         }
-
+        if (mode === 'validated-filter' && (ml.confidence ?? 0) < 0.08) {
+            rejected.ml += 1;
+            continue;
+        }
+        const score = Math.max(ruleScore, mlRescue ? MIN_SCORE : ruleScore);
         const imageCandidates = imageCandidatesFromFeedItem(item, link);
 
         candidates.push({
@@ -451,9 +481,13 @@ const buildSourceCandidates = async (source, editionDate, language) => {
             category,
             language,
             excerpt,
+            deck,
+            ml,
+            ruleScore,
             imageCandidates,
             imageUrl: imageCandidates[0],
-            score,
+            score: score + (typeof ml.confidence === 'number'
+                ? (ml.confidence - 0.5) * 4 : 0),
             sourceId: source.id,
             publisherDomain: source.publisherDomain,
             sourcePriority: source.priority,
@@ -468,6 +502,8 @@ const buildSourceCandidates = async (source, editionDate, language) => {
             source: source.name,
             feedItems: sourceItems.length,
             candidates: candidates.length,
+            mlScored,
+            exploration,
             rejected,
         },
     };
@@ -512,7 +548,7 @@ const ageHoursAtEditionCutoff = (publishedAt, editionDate) => {
     return Math.max(0, (cutoff - published) / 3_600_000);
 };
 
-const buildEdition = (candidates, editionDate, language) => {
+const buildEdition = (candidates, editionDate, language, limit = EDITION_LIMIT) => {
     const ranked = [...candidates].sort((a, b) => {
         const totalA = a.score + a.sourcePriority;
         const totalB = b.score + b.sourcePriority;
@@ -559,18 +595,18 @@ const buildEdition = (candidates, editionDate, language) => {
 
     for (const windowHours of SELECTION_WINDOWS_HOURS) {
         for (const article of ranked) {
-            if (accepted.length >= EDITION_LIMIT) break;
+            if (accepted.length >= limit) break;
             if (ageHoursAtEditionCutoff(article.publishedAt, editionDate) > windowHours) {
                 continue;
             }
             if (canAccept(article, true)) accept(article);
         }
-        if (accepted.length >= EDITION_LIMIT) break;
+        if (accepted.length >= limit) break;
     }
 
-    if (accepted.length < EDITION_LIMIT) {
+    if (accepted.length < limit) {
         for (const article of ranked) {
-            if (accepted.length >= EDITION_LIMIT) break;
+            if (accepted.length >= limit) break;
             if (
                 ageHoursAtEditionCutoff(article.publishedAt, editionDate) >
                 MAX_LOOKBACK_HOURS
@@ -581,7 +617,7 @@ const buildEdition = (candidates, editionDate, language) => {
         }
     }
 
-    return accepted.map(toArticle);
+    return accepted;
 };
 
 const errorMessage = (reason) =>
@@ -631,6 +667,38 @@ export default async function handler(req, res) {
             return res.status(200).json(existingEdition);
         }
 
+        // Visitors must NEVER trigger ingestion or paid processing.
+        // In production, only Vercel Cron's secret can generate a missing edition.
+        const cronAuthorized = Boolean(process.env.CRON_SECRET) &&
+            req.headers.authorization === `Bearer ${process.env.CRON_SECRET}`;
+        const localBuildAllowed = process.env.GUD_ALLOW_ON_DEMAND_BUILD === 'true' &&
+            (!process.env.VERCEL_ENV || process.env.VERCEL_ENV === 'development');
+        if (!cronAuthorized && !localBuildAllowed) {
+            // Serve the previous shared snapshot between the UTC date rollover and
+            // the scheduled ingestion. It MUST NOT retain the normal 24-hour cache,
+            // or the previous edition could mask a newly generated edition.
+            const previousDate = new Date(Date.parse(`${editionDate}T00:00:00Z`) - 86_400_000)
+                .toISOString().slice(0, 10);
+            const prior = await readDailyEdition({
+                editionDate: previousDate, edition,
+                rulesetVersion: EDITORIAL_RULESET_VERSION,
+            });
+            if (prior) {
+                res.setHeader('Cache-Control', 'public, max-age=30');
+                res.setHeader('Vercel-CDN-Cache-Control', 'public, max-age=60');
+                res.setHeader('X-GUD-Snapshot-Status', 'previous-day');
+                res.setHeader('Content-Language', edition === 'latam' ? 'es-419' : 'en');
+                return res.status(200).json(prior);
+            }
+            res.setHeader('Cache-Control', 'no-store');
+            res.setHeader('Vercel-CDN-Cache-Control', 'no-store');
+            return res.status(503).json({
+                articles: [], generatedAt: new Date().toISOString(), editionDate,
+                edition, language, issueNumber: issueNumberForDate(editionDate),
+                count: 0, editionMinTarget: EDITION_MIN_TARGET, editionLimit: EDITION_LIMIT,
+                error: 'Daily edition not generated yet.',
+            });
+        }
         const results = await fetchSourcesWithConcurrency(
             newsSources,
             editionDate,
@@ -643,11 +711,34 @@ export default async function handler(req, res) {
         const sourceDiagnostics = fulfilled.map(
             (result) => result.value.diagnostics,
         );
-        const selectedArticles = buildEdition(
-            fulfilledCandidates,
-            editionDate,
-            edition,
+        // Local pipeline always runs before ANY paid API. LLM sees <=18 selected
+        // articles, never the feed pool, and is called once per shared edition.
+        const shortlist = buildEdition(
+            fulfilledCandidates, editionDate, language, SHORTLIST_LIMIT,
         );
+        const { decisions, meta: llm } = await auditShortlist(shortlist);
+        let selected = shortlist;
+        if (llm.enabled) {
+            selected = shortlist.filter((article) => decisions.get(article.id)?.eligible === true);
+            // If the provider completely fails, only use locally strong stories.
+            // All such fallbacks are visibly marked in private diagnostics.
+            if (llm.accepted === 0 && llm.rejected === 0 && llm.unknown > 0) {
+                llm.errors.push('fallback_to_strict_local_review');
+                selected = shortlist.filter((article) =>
+                    article.ruleScore >= 12 &&
+                    (article.ml.confidence ?? 0) >= 0.6,
+                );
+            }
+        }
+        const selectedArticles = selected.slice(0, EDITION_LIMIT).map(toArticle);
+        const seenExplorationSources = new Set();
+        const reviewExploration = sourceDiagnostics.flatMap((source) => source.exploration || [])
+            .sort((a, b) => (b.mlScore ?? 0) - (a.mlScore ?? 0))
+            .filter((entry) => {
+                if (seenExplorationSources.has(entry.sourceId)) return false;
+                seenExplorationSources.add(entry.sourceId);
+                return true;
+            }).slice(0, 8);
         const articles = await enrichArticleImages(selectedArticles);
 
         const successfulSources = fulfilled.length;
@@ -683,6 +774,8 @@ export default async function handler(req, res) {
                 noPositiveOutcome:
                     totals.noPositiveOutcome + source.rejected.noPositiveOutcome,
                 belowScore: totals.belowScore + source.rejected.belowScore,
+                editorialGuard: totals.editorialGuard + source.rejected.editorialGuard,
+                ml: totals.ml + source.rejected.ml,
             }),
             emptyRejections(),
         );
@@ -701,6 +794,7 @@ export default async function handler(req, res) {
             language,
             issueNumber: issueNumberForDate(editionDate),
             count: articles.length,
+            editionMinTarget: EDITION_MIN_TARGET,
             editionLimit: EDITION_LIMIT,
             editorialRulesetVersion: EDITORIAL_RULESET_VERSION,
             uniqueSources,
@@ -744,6 +838,41 @@ export default async function handler(req, res) {
             },
         };
 
+        const telemetry = {
+            editionDate, edition,
+            generatedAt: payload.generatedAt,
+            input: {
+                sources: newsSources.length,
+                successfulSources,
+                totalFeedItems,
+                localQualified: fulfilledCandidates.length,
+                exploration: reviewExploration.length,
+                shortlist: shortlist.length,
+                published: articles.length,
+                rejections: rejectionTotals,
+            },
+            ml: {
+                ...getMLStatus(),
+                scored: sourceDiagnostics.reduce((n, source) => n + (source.mlScored || 0), 0),
+                constructive: fulfilledCandidates.filter(a => a.ml.label === 'constructive').length,
+                notConstructive: fulfilledCandidates.filter(a => a.ml.label === 'not_constructive').length,
+            },
+            llm,
+            // A bounded audit log. No credentials or unrestricted feed dumps.
+            decisions: [...shortlist.map((a) => ({
+                lane: 'shortlist',
+                id: a.id, title: a.title.slice(0, 180), deck: String(a.deck || '').slice(0, 360), source: a.source,
+                category: a.category, ruleScore: a.ruleScore,
+                mlLabel: a.ml.label, mlScore: a.ml.confidence,
+                llm: decisions.get(a.id) ?? (llm.enabled ? { eligible: null, reason: 'not_audited' } : null),
+                published: articles.some((story) => story.id === a.id),
+            })), ...reviewExploration.map((a) => ({
+                lane: 'exploration', id: a.id, title: a.title.slice(0, 180),
+                deck: a.deck, source: a.source, category: a.category,
+                ruleScore: null, mlLabel: a.mlLabel, mlScore: a.mlScore,
+                llm: null, published: false, reason: a.reason,
+            }))],
+        };
         const sharedPayload = await commitDailyEdition({
             editionDate,
             edition,
@@ -751,6 +880,9 @@ export default async function handler(req, res) {
             payload,
         });
 
+        if (sharedPayload.generatedAt === payload.generatedAt) {
+            await saveTelemetry(editionDate, edition, telemetry);
+        }
         setEditionHeaders(res, { editionDate, edition, language });
         res.setHeader(
             'X-GUD-Snapshot-Status',
@@ -768,6 +900,7 @@ export default async function handler(req, res) {
             language,
             issueNumber: issueNumberForDate(editionDate),
             count: 0,
+            editionMinTarget: EDITION_MIN_TARGET,
             editionLimit: EDITION_LIMIT,
             editorialRulesetVersion: EDITORIAL_RULESET_VERSION,
             uniqueSources: 0,

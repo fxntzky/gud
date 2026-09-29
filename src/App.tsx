@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  CategoryNav,
-  categoryLabel,
-  type EditionView,
-} from './components/CategoryNav';
+import { CategoryNav, type EditionView } from './components/CategoryNav';
+import { categoryLabel } from './config/categoryLabels';
 import { EditionBatch } from './components/EditionBatch';
 import { EditionSwitch } from './components/EditionSwitch';
 import { EditionWelcome } from './components/EditionWelcome';
@@ -101,6 +98,7 @@ function App() {
   const [backToTopVisible, setBackToTopVisible] = useState(false);
   const preloaderStartedAt = useRef(0);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const cachedEditionRef = useRef<{ edition: NewsEdition; dateKey: string } | null>(null);
 
   useEffect(() => {
     if (!edition) return;
@@ -109,39 +107,11 @@ function App() {
     const controller = new AbortController();
     const dateKey = getUtcEditionKey();
     const cacheKey = cacheKeyForEdition(dateKey, activeEdition);
-    let hadCachedEdition = false;
+    const hadCachedEdition =
+      cachedEditionRef.current?.edition === activeEdition &&
+      cachedEditionRef.current.dateKey === dateKey;
 
     document.documentElement.lang = activeEdition === 'latam' ? 'es-419' : 'en';
-
-    setStatus('loading');
-    setPreloaderLeaving(false);
-    setArticles([]);
-    setGeneratedAt(undefined);
-    setEditionDate(dateKey);
-    setVisibleCount(STORIES_PER_REVEAL);
-
-    try {
-      const cached = window.localStorage.getItem(cacheKey);
-      if (cached) {
-        const data = JSON.parse(cached) as NewsResponse;
-
-        if (
-          data.articles?.length > 0 &&
-          data.editionDate === dateKey &&
-          data.edition === activeEdition
-        ) {
-          hadCachedEdition = true;
-          setArticles(data.articles.slice(0, EDITION_LIMIT));
-          setGeneratedAt(data.generatedAt);
-          setEditionDate(data.editionDate);
-          setIssueNumber(data.issueNumber ?? 1);
-          setVisibleCount(STORIES_PER_REVEAL);
-          setStatus('ready');
-        }
-      }
-    } catch {
-      window.localStorage.removeItem(cacheKey);
-    }
 
     const loadNews = async () => {
       try {
@@ -199,6 +169,7 @@ function App() {
   useEffect(() => {
     const handlePopState = () => {
       setActiveView(readViewFromLocation());
+      setVisibleCount(STORIES_PER_REVEAL);
     };
 
     window.addEventListener('popstate', handlePopState);
@@ -235,10 +206,6 @@ function App() {
       document.documentElement.classList.remove('is-preloading');
     };
   }, [edition, preloaderVisible]);
-
-  useEffect(() => {
-    setVisibleCount(STORIES_PER_REVEAL);
-  }, [activeView, edition]);
 
   useEffect(() => {
     const updateBackToTop = () => {
@@ -299,6 +266,7 @@ function App() {
     if (!edition) return;
 
     setActiveView(view);
+    if (view !== activeView) setVisibleCount(STORIES_PER_REVEAL);
 
     const url = new URL(window.location.href);
     if (view === 'today') {
@@ -325,10 +293,34 @@ function App() {
       `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`,
     );
 
+    // Hydrate the shared daily snapshot during the user interaction, not in an effect.
+    const dateKey = getUtcEditionKey();
+    const cacheKey = cacheKeyForEdition(dateKey, nextEdition);
+    let cached: NewsResponse | null = null;
+
+    try {
+      const raw = window.localStorage.getItem(cacheKey);
+      if (raw) {
+        const data = JSON.parse(raw) as NewsResponse;
+        if (
+          data.articles?.length > 0 &&
+          data.editionDate === dateKey &&
+          data.edition === nextEdition
+        ) {
+          cached = data;
+        }
+      }
+    } catch {
+      window.localStorage.removeItem(cacheKey);
+    }
+
+    cachedEditionRef.current = cached ? { edition: nextEdition, dateKey } : null;
     setActiveView('today');
-    setArticles([]);
-    setGeneratedAt(undefined);
-    setStatus('loading');
+    setArticles(cached?.articles.slice(0, EDITION_LIMIT) ?? []);
+    setGeneratedAt(cached?.generatedAt);
+    setEditionDate(cached?.editionDate ?? dateKey);
+    setIssueNumber(cached?.issueNumber ?? 1);
+    setStatus(cached ? 'ready' : 'loading');
     setVisibleCount(STORIES_PER_REVEAL);
     setPreloaderLeaving(false);
     preloaderStartedAt.current = Date.now();
@@ -378,6 +370,7 @@ function App() {
 
       {edition && preloaderVisible && (
         <WelcomePreloader
+          key={edition}
           edition={edition}
           editionDate={editionDate}
           leaving={preloaderLeaving}

@@ -1,9 +1,9 @@
 node_modules
 dist
 .vercel
-.env
-.env.*
+.env*
 !.env.example
 .DS_Store
 *.local
-.env*
+# Private exported training labels, do not commit
+data/training/validated.jsonl

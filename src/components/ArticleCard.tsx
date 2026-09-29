@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { NewsArticle, NewsEdition } from '../types/news';
-import { categoryLabel } from './CategoryNav';
+import { categoryLabel } from '../config/categoryLabels';
 import { formatDate, formatRelativeTime } from '../utils/date';
 import { trackOutboundSourceClick } from '../utils/analytics';
 
@@ -39,10 +39,6 @@ export function ArticleCard({
   const currentImage = candidates[candidateIndex];
   const hasImage = Boolean(currentImage);
   const isLatam = edition === 'latam';
-
-  useEffect(() => {
-    setCandidateIndex(0);
-  }, [article.id]);
 
   const tryNextImage = () => {
     setCandidateIndex((current) => current + 1);

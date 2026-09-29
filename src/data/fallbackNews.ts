@@ -4,28 +4,28 @@ export const fallbackNews: Record<NewsEdition, NewsArticle[]> = {
   english: [
     {
       id: 'fallback-en-1',
-      title: 'The newspaper is ready. Live stories arrive when the RSS endpoint is running.',
+      title: 'The shared edition is not available yet.',
       url: '#',
       source: 'GUD',
       publishedAt: new Date().toISOString(),
       category: 'society',
       language: 'en',
       excerpt:
-        'Run the project with Vercel Dev to activate the serverless RSS endpoint locally.',
+        'GUD does not fetch or classify news for individual visitors. The next scheduled edition will appear here.',
       score: 10,
     },
   ],
   latam: [
     {
       id: 'fallback-latam-1',
-      title: 'El diario está listo. Las noticias llegan cuando el endpoint RSS está activo.',
+      title: 'La edición compartida todavía no está disponible.',
       url: '#',
       source: 'GUD',
       publishedAt: new Date().toISOString(),
       category: 'society',
       language: 'es',
       excerpt:
-        'Ejecuta el proyecto con Vercel Dev para activar el endpoint RSS local.',
+        'GUD no consulta ni clasifica noticias por visitante. La próxima edición programada aparecerá aquí.',
       score: 10,
     },
   ],

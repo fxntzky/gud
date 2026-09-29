@@ -33,11 +33,11 @@ export function WelcomePreloader({
   const [frameIndex, setFrameIndex] = useState(0);
   const isLatam = edition === 'latam';
   const sequence = frames[edition];
-  const frame = sequence[frameIndex % sequence.length];
+  const displayIndex = leaving ? 0 : frameIndex;
+  const frame = sequence[displayIndex % sequence.length];
   const isWideWord = frame.word.length > 3;
 
   useEffect(() => {
-    setFrameIndex(0);
     if (leaving) return;
 
     const interval = window.setInterval(() => {
@@ -71,7 +71,7 @@ export function WelcomePreloader({
             }`}
             aria-hidden="true"
           >
-            <span key={`${edition}-${frameIndex}`}>{frame.word}</span>
+            <span key={`${edition}-${displayIndex}`}>{frame.word}</span>
           </div>
 
           <p>
@@ -83,7 +83,7 @@ export function WelcomePreloader({
 
         <div className="gud-preloader__bottom">
           <div className="gud-preloader__bottom-copy" aria-hidden="true">
-            <span key={`${edition}-status-${frameIndex}`}>{frame.status}</span>
+            <span key={`${edition}-status-${displayIndex}`}>{frame.status}</span>
             <span>
               {isLatam
                 ? 'Fuentes originales en español'
