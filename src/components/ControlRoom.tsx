@@ -33,6 +33,10 @@ type Telemetry = {
     sources: number; successfulSources: number; totalFeedItems: number;
     localQualified: number; shortlist: number; published: number;
     rejections: Record<string, number>;
+    explorationSampling?: {
+      method: string; limit: number; outcomeTarget: number; selectedOutcome: number;
+      selectedOther: number; sampledPublisherCount: number; sampledCategoryCount: number;
+    };
   };
   ml: { version: string; available: boolean; samples?: number; trainingSamples: number;
     mode: string; scored: number; constructive: number; notConstructive: number };
@@ -62,6 +66,12 @@ const displayCount = (value?: number | null) => value === null || value === unde
 const statusCopy = (decision: Decision) =>
   !decision.llm ? 'OFF' : decision.llm.eligible === true ? 'PASS' :
     decision.llm.eligible === false ? 'REJECT' : 'UNRESOLVED';
+
+const rejectionReasonCopy: Record<string, string> = {
+  missing_legacy_outcome: 'NO POSITIVE OUTCOME RECOGNIZED',
+  legacy_false_positive: 'POTENTIAL FALSE-POSITIVE PATTERN',
+  below_rule_score: 'BELOW LOCAL SCORE THRESHOLD',
+};
 
 const safeArticleUrl = (value?: string): string | null => {
   if (!value) return null;
@@ -358,6 +368,11 @@ export function ControlRoom() {
             <section className="control-room__reviews" aria-labelledby="review-heading">
               <div className="control-room__reviews-heading"><div><span className="control-room__eyebrow">EDITORIAL AUDIT LOG</span><h2 id="review-heading">Review the decisions.</h2></div><span>{stats?.decisions?.length ?? 0} ARTICLES</span></div>
               <p>Read the full source first. Your choices remain a local draft until SAVE. YES publishes or retains a story, NO removes it, IRRELEVANT removes it but remains positive for training. An unreviewed day stays automatic. Changes apply to today's shared edition only.</p>
+              {stats?.input.explorationSampling && <p className="control-room__diagnostic-note">
+                <strong>LATAM DIAGNOSTIC SAMPLE · {stats.input.explorationSampling.selectedOutcome} MISSING OUTCOME + {stats.input.explorationSampling.selectedOther} OTHER REJECTIONS.</strong>{' '}
+                {stats.input.explorationSampling.sampledPublisherCount} sources · {stats.input.explorationSampling.sampledCategoryCount} categories.
+                A diversified sample for discovering false negatives, not a complete rejection list or statistical prevalence estimate. The ML raw score is uncalibrated. Exploration never triggers LLM or automatic publication.
+              </p>}
               {(stats?.decisions || []).map((item) => {
                 const sourceLink = editorialSourceLink(item, current?.articles);
                 return <article className="control-room__review" key={item.id}>
@@ -365,6 +380,7 @@ export function ControlRoom() {
                   <span className="control-room__eyebrow">{item.lane === 'exploration' ? 'EXPLORATION · ' : 'SHORTLIST · '}{item.category} / {item.source}</span>
                   <h3>{item.title}</h3>
                   {item.deck && <p>{item.deck}</p>}
+                  {item.lane === 'exploration' && item.reason && <p className="control-room__reason">RULE REJECTION: {rejectionReasonCopy[item.reason] || item.reason}</p>}
                   <a className="control-room__source-link" href={sourceLink.href} target="_blank" rel="noopener noreferrer" aria-label={`${sourceLink.label.replace(' ↗', '')}: ${item.title}`}>
                     {sourceLink.label}
                   </a>

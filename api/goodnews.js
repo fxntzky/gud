@@ -25,6 +25,7 @@ import { editorialGuard } from '../server/classification/editorialGuard.js';
 import { classifyML, getMLStatus } from '../server/classification/mlClassifier.js';
 import { auditShortlist } from '../server/classification/llmAuditor.js';
 import { saveTelemetry } from '../server/learning/telemetryStore.js';
+import { retainLatamDiagnostic, selectLatamDiagnosticExploration } from '../server/learning/explorationSampler.js';
 import { readCuratedEdition } from '../server/learning/curatedEditionStore.js';
 import {
     commitDailyEdition,
@@ -381,17 +382,19 @@ const buildSourceCandidates = async (source, editionDate, language) => {
     const exploration = [];
     let mlScored = 0;
     const captureExploration = ({ item, title, link, deck, category, ml, reason }) => {
-        // A few borderline rejects are retained for HUMAN review only.
-        // This lane never reaches the paid LLM or the public edition.
-        if (exploration.length >= 3 || (ml.confidence ?? 0) < 0.55) return;
-        exploration.push({
+        // Exploration is private diagnostic evidence, never sent to the LLM
+        // or automatically published. LATAM needs coverage beyond high ML scores.
+        if (language !== 'es' && (exploration.length >= 3 || (ml.confidence ?? 0) < 0.55)) return;
+        const entry = {
             id: makeId(language, source.name, title, link), title,
             url: link, publishedAt: new Date(item.isoDate ?? item.pubDate).toISOString(),
             imageCandidates: imageCandidatesFromFeedItem(item, link),
             deck: String(deck || '').slice(0, 360), source: source.name,
             category, mlLabel: ml.label, mlScore: ml.confidence,
             reason, sourceId: source.id,
-        });
+        };
+        if (language === 'es') retainLatamDiagnostic(exploration, entry, editionDate);
+        else exploration.push(entry);
     };
 
     for (const item of sourceItems) {
@@ -737,8 +740,12 @@ export default async function handler(req, res) {
             }
         }
         const selectedArticles = selected.slice(0, EDITION_LIMIT).map(toArticle);
+        const latamDiagnostic = edition === 'latam'
+            ? selectLatamDiagnosticExploration(sourceDiagnostics, editionDate)
+            : null;
         const seenExplorationSources = new Set();
-        const reviewExploration = sourceDiagnostics.flatMap((source) => source.exploration || [])
+        const reviewExploration = latamDiagnostic?.selected ?? sourceDiagnostics
+            .flatMap((source) => source.exploration || [])
             .sort((a, b) => (b.mlScore ?? 0) - (a.mlScore ?? 0))
             .filter((entry) => {
                 if (seenExplorationSources.has(entry.sourceId)) return false;
@@ -853,6 +860,7 @@ export default async function handler(req, res) {
                 totalFeedItems,
                 localQualified: fulfilledCandidates.length,
                 exploration: reviewExploration.length,
+                ...(latamDiagnostic ? { explorationSampling: latamDiagnostic.diagnostics } : {}),
                 shortlist: shortlist.length,
                 published: articles.length,
                 rejections: rejectionTotals,

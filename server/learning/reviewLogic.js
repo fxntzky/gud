@@ -4,8 +4,8 @@ export const REVIEW_LABELS = Object.freeze(['constructive', 'not_constructive', 
 export const isReviewLabel = (value) => REVIEW_LABELS.includes(value);
 
 export function validateReviewBatch(reviews, eligibleIds) {
-  if (!Array.isArray(reviews) || reviews.length < 1 || reviews.length > 30) {
-    return { valid: false, error: 'Review batch must contain 1–30 changes.' };
+  if (!Array.isArray(reviews) || reviews.length < 1 || reviews.length > 40) {
+    return { valid: false, error: 'Review batch must contain 1–40 changes.' };
   }
   const seen = new Set();
   for (const row of reviews) {

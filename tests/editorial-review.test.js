@@ -24,9 +24,16 @@ test('batch rejects duplicates, unknown IDs, legacy uncertainty and oversized in
   const invalid = [
     [], [{ id: a, label: 'constructive' }, { id: a, label: 'irrelevant' }],
     [{ id: 'f'.repeat(40), label: 'constructive' }], [{ id: a, label: 'uncertain' }],
-    Array.from({ length: 31 }, () => ({ id: a, label: 'constructive' })),
+    Array.from({ length: 41 }, () => ({ id: a, label: 'constructive' })),
   ];
   for (const changes of invalid) assert.equal(validateReviewBatch(changes, ids).valid, false);
+});
+
+test('daily diagnostic review can save an entire 34-article queue in one batch', () => {
+  const rows = Array.from({ length: 34 }, (_, i) => ({
+    id: i.toString(16).padStart(40, '0'), label: 'constructive',
+  }));
+  assert.equal(validateReviewBatch(rows, new Set(rows.map(x => x.id))).valid, true);
 });
 
 test('old per-item records and new one-write batches are both readable', () => {
