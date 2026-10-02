@@ -21,12 +21,9 @@ import type {
 } from './types/news';
 import { formatUpdatedAt, getUtcEditionKey } from './utils/date';
 import './styles/app.scss';
-
 type Status = 'loading' | 'ready' | 'fallback';
-
 const PRELOADER_MIN_MS = 1800;
 const PRELOADER_EXIT_MS = 620;
-
 const newsCategories: NewsCategory[] = [
   'science',
   'health',
@@ -37,53 +34,61 @@ const newsCategories: NewsCategory[] = [
   'culture',
   'community',
 ];
-
 const cacheKeyForEdition = (
   editionKey: string,
   edition: NewsEdition,
 ): string =>
   `gud:edition:${EDITORIAL_RULESET_VERSION}:${edition}:${editionKey}`;
-
+const PUBLICATION_SIGNAL_KEY = 'gud:publication-revision:v1';
+type PublicationSignal = {
+  date: string;
+  edition: NewsEdition;
+  rulesetVersion?: string;
+  updatedAt: number;
+};
+const readPublicationSignal = (): PublicationSignal | null => {
+  try {
+    const raw = window.localStorage.getItem(PUBLICATION_SIGNAL_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<PublicationSignal>;
+    if (
+      typeof value.date !== 'string' ||
+      (value.edition !== 'english' && value.edition !== 'latam') ||
+      typeof value.updatedAt !== 'number'
+    ) return null;
+    return value as PublicationSignal;
+  } catch {
+    return null;
+  }
+};
 const isNewsCategory = (value: string | null): value is NewsCategory =>
   Boolean(value && newsCategories.includes(value as NewsCategory));
-
 const readViewFromLocation = (): EditionView => {
   if (typeof window === 'undefined') return 'today';
-
   const category = new URLSearchParams(window.location.search).get('category');
   return isNewsCategory(category) ? category : 'today';
 };
-
 function chunkArticles(articles: NewsArticle[], size: number): NewsArticle[][] {
   const chunks: NewsArticle[][] = [];
-
   for (let index = 0; index < articles.length; index += size) {
     chunks.push(articles.slice(index, index + size));
   }
-
   return chunks;
 }
-
 const hasDeclaredImage = (article: NewsArticle): boolean =>
   Boolean(article.imageUrl || article.imageCandidates?.some(Boolean));
-
 const placeImageLessStoriesInMiddle = (stories: NewsArticle[]): NewsArticle[] => {
   if (stories.length < 2) return stories;
-
   const withImage = stories.filter(hasDeclaredImage);
   const withoutImage = stories.filter((article) => !hasDeclaredImage(article));
-
   if (withoutImage.length === 0 || withImage.length === 0) return stories;
-
   const insertAt = Math.max(1, Math.floor(withImage.length / 2));
-
   return [
     ...withImage.slice(0, insertAt),
     ...withoutImage,
     ...withImage.slice(insertAt),
   ];
 };
-
 function App() {
   const [edition, setEdition] = useState<NewsEdition | null>(null);
   const [articles, setArticles] = useState<NewsArticle[]>([]);
@@ -96,13 +101,12 @@ function App() {
   const [preloaderVisible, setPreloaderVisible] = useState(false);
   const [preloaderLeaving, setPreloaderLeaving] = useState(false);
   const [backToTopVisible, setBackToTopVisible] = useState(false);
+  const [publicationRevision, setPublicationRevision] = useState(0);
   const preloaderStartedAt = useRef(0);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const cachedEditionRef = useRef<{ edition: NewsEdition; dateKey: string } | null>(null);
-
   useEffect(() => {
     if (!edition) return;
-
     const activeEdition = edition;
     const controller = new AbortController();
     const dateKey = getUtcEditionKey();
@@ -110,35 +114,28 @@ function App() {
     const hadCachedEdition =
       cachedEditionRef.current?.edition === activeEdition &&
       cachedEditionRef.current.dateKey === dateKey;
-
     document.documentElement.lang = activeEdition === 'latam' ? 'es-419' : 'en';
-
     const loadNews = async () => {
       try {
         const response = await fetch(
-          `/api/goodnews?date=${encodeURIComponent(dateKey)}&edition=${encodeURIComponent(activeEdition)}&rules=${encodeURIComponent(EDITORIAL_RULESET_VERSION)}`,
-          { signal: controller.signal },
+          `/api/goodnews?date=${encodeURIComponent(dateKey)}&edition=${encodeURIComponent(activeEdition)}&rules=${encodeURIComponent(EDITORIAL_RULESET_VERSION)}${publicationRevision ? `&revision=${encodeURIComponent(String(publicationRevision))}` : ''}`,
+          { signal: controller.signal, cache: 'no-store' },
         );
-
         if (!response.ok) {
           throw new Error(`News endpoint returned ${response.status}`);
         }
-
         const data = (await response.json()) as NewsResponse;
-
         // A human editor may deliberately withdraw every article. Do not
         // replace that decision with unreviewed placeholder/fallback stories.
         if (data.edition !== activeEdition) {
           throw new Error('News endpoint returned the wrong GUD edition.');
         }
-
         setArticles(data.articles.slice(0, EDITION_LIMIT));
         setGeneratedAt(data.generatedAt);
         setEditionDate(data.editionDate ?? dateKey);
         setIssueNumber(data.issueNumber ?? 1);
         setVisibleCount(STORIES_PER_REVEAL);
         setStatus('ready');
-
         try {
           window.localStorage.setItem(cacheKey, JSON.stringify(data));
         } catch {
@@ -146,11 +143,8 @@ function App() {
         }
       } catch (error) {
         if (controller.signal.aborted) return;
-
         console.error(error);
-
         if (hadCachedEdition) return;
-
         setArticles(fallbackNews[activeEdition]);
         setGeneratedAt(new Date().toISOString());
         setEditionDate(dateKey);
@@ -158,97 +152,104 @@ function App() {
         setStatus('fallback');
       }
     };
-
     void loadNews();
-
     return () => controller.abort();
+  }, [edition, publicationRevision]);
+  useEffect(() => {
+    if (!edition) return;
+    const activeEdition = edition;
+    const refreshPublicEdition = (revision = Date.now()) => {
+      setPublicationRevision((current) => revision === current ? current + 1 : revision);
+    };
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== PUBLICATION_SIGNAL_KEY || !event.newValue) return;
+      try {
+        const signal = JSON.parse(event.newValue) as PublicationSignal;
+        if (signal.edition === activeEdition && signal.date === getUtcEditionKey()) {
+          refreshPublicEdition(signal.updatedAt);
+        }
+      } catch {
+        // Ignore malformed cross-tab signals.
+      }
+    };
+    const handleFocus = () => refreshPublicEdition();
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) refreshPublicEdition();
+    };
+    window.addEventListener('storage', handleStorage);
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('pageshow', handlePageShow);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('pageshow', handlePageShow);
+    };
   }, [edition]);
-
   useEffect(() => {
     const handlePopState = () => {
       setActiveView(readViewFromLocation());
       setVisibleCount(STORIES_PER_REVEAL);
     };
-
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
-
   useEffect(() => {
     if (!edition || !preloaderVisible || status === 'loading') return;
-
     const elapsed = Date.now() - preloaderStartedAt.current;
     const remaining = Math.max(0, PRELOADER_MIN_MS - elapsed);
     const timeout = window.setTimeout(() => {
       setPreloaderLeaving(true);
     }, remaining);
-
     return () => window.clearTimeout(timeout);
   }, [edition, preloaderVisible, status]);
-
   useEffect(() => {
     if (!preloaderLeaving) return;
-
     const timeout = window.setTimeout(() => {
       setPreloaderVisible(false);
     }, PRELOADER_EXIT_MS);
-
     return () => window.clearTimeout(timeout);
   }, [preloaderLeaving]);
-
   useEffect(() => {
     const overlayVisible = !edition || preloaderVisible;
     document.documentElement.classList.toggle('is-preloading', overlayVisible);
-
     return () => {
       document.documentElement.classList.remove('is-preloading');
     };
   }, [edition, preloaderVisible]);
-
   useEffect(() => {
     const updateBackToTop = () => {
       setBackToTopVisible(window.scrollY > window.innerHeight * 1.25);
     };
-
     updateBackToTop();
     window.addEventListener('scroll', updateBackToTop, { passive: true });
     window.addEventListener('resize', updateBackToTop);
-
     return () => {
       window.removeEventListener('scroll', updateBackToTop);
       window.removeEventListener('resize', updateBackToTop);
     };
   }, []);
-
   const categoryCounts = useMemo(() => {
     const counts: Partial<Record<NewsCategory, number>> = {};
-
     for (const article of articles) {
       counts[article.category] = (counts[article.category] ?? 0) + 1;
     }
-
     return counts;
   }, [articles]);
-
   const filteredArticles = useMemo(() => {
     const stories =
       activeView === 'today'
         ? articles
         : articles.filter((article) => article.category === activeView);
-
     return placeImageLessStoriesInMiddle(stories);
   }, [activeView, articles]);
-
   const visibleArticles = useMemo(
     () => filteredArticles.slice(0, visibleCount),
     [filteredArticles, visibleCount],
   );
-
   const batches = useMemo(
     () => chunkArticles(visibleArticles, STORIES_PER_REVEAL),
     [visibleArticles],
   );
-
   const activeEdition: NewsEdition = edition ?? 'english';
   const copy = editionCopy[activeEdition];
   const totalStories = filteredArticles.length;
@@ -259,13 +260,10 @@ function App() {
     activeView === 'today'
       ? copy.today
       : categoryLabel(activeView, activeEdition);
-
   const selectView = (view: EditionView) => {
     if (!edition) return;
-
     setActiveView(view);
     if (view !== activeView) setVisibleCount(STORIES_PER_REVEAL);
-
     const url = new URL(window.location.href);
     if (view === 'today') {
       url.searchParams.delete('category');
@@ -274,13 +272,10 @@ function App() {
     }
     url.searchParams.set('edition', edition);
     url.searchParams.delete('lang');
-
     window.history.pushState({}, '', `${url.pathname}${url.search}${url.hash}`);
   };
-
   const selectEdition = (nextEdition: NewsEdition) => {
     if (nextEdition === edition && !preloaderVisible) return;
-
     const nextUrl = new URL(window.location.href);
     nextUrl.searchParams.set('edition', nextEdition);
     nextUrl.searchParams.delete('lang');
@@ -290,14 +285,17 @@ function App() {
       '',
       `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`,
     );
-
     // Hydrate the shared daily snapshot during the user interaction, not in an effect.
     const dateKey = getUtcEditionKey();
     const cacheKey = cacheKeyForEdition(dateKey, nextEdition);
+    const publicationSignal = readPublicationSignal();
+    const latestRevision =
+      publicationSignal?.date === dateKey && publicationSignal.edition === nextEdition
+        ? publicationSignal.updatedAt
+        : 0;
     let cached: NewsResponse | null = null;
-
     try {
-      const raw = window.localStorage.getItem(cacheKey);
+      const raw = latestRevision ? null : window.localStorage.getItem(cacheKey);
       if (raw) {
         const data = JSON.parse(raw) as NewsResponse;
         if (
@@ -311,7 +309,6 @@ function App() {
     } catch {
       window.localStorage.removeItem(cacheKey);
     }
-
     cachedEditionRef.current = cached ? { edition: nextEdition, dateKey } : null;
     setActiveView('today');
     setArticles(cached?.articles.slice(0, EDITION_LIMIT) ?? []);
@@ -324,28 +321,24 @@ function App() {
     preloaderStartedAt.current = Date.now();
     setPreloaderVisible(true);
     window.scrollTo({ top: 0, behavior: 'auto' });
+    setPublicationRevision(latestRevision);
     setEdition(nextEdition);
   };
-
   const scrollToTop = () => {
     const reducedMotion = window.matchMedia(
       '(prefers-reduced-motion: reduce)',
     ).matches;
-
     window.scrollTo({
       top: 0,
       behavior: reducedMotion ? 'auto' : 'smooth',
     });
   };
-
   useEffect(() => {
     const sentinel = sentinelRef.current;
     if (!sentinel || !hasMore) return;
-
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (!entry.isIntersecting) return;
-
         observer.unobserve(entry.target);
         setVisibleCount((current) =>
           Math.min(current + STORIES_PER_REVEAL, totalStories),
@@ -356,16 +349,12 @@ function App() {
         threshold: 0.15,
       },
     );
-
     observer.observe(sentinel);
-
     return () => observer.disconnect();
   }, [hasMore, totalStories, visibleCount]);
-
   return (
     <>
       {!edition && <EditionWelcome onSelect={selectEdition} />}
-
       {edition && preloaderVisible && (
         <WelcomePreloader
           key={edition}
@@ -374,7 +363,6 @@ function App() {
           leaving={preloaderLeaving}
         />
       )}
-
       <main
         className={`newspaper${!edition || preloaderVisible ? ' newspaper--preloading' : ''}`}
         aria-busy={status === 'loading' || preloaderVisible}
@@ -388,7 +376,6 @@ function App() {
           storyCount={status === 'loading' ? 0 : articles.length}
           loading={status === 'loading'}
         />
-
         <div className="newspaper-controls">
           <CategoryNav
             activeView={activeView}
@@ -399,18 +386,15 @@ function App() {
           />
           <EditionSwitch edition={activeEdition} onChange={selectEdition} />
         </div>
-
         {activeView !== 'today' && status !== 'loading' && (
           <div className="newspaper__section-heading" aria-live="polite">
             <span>{activeLabel}</span>
             <span>{copy.storiesInEdition(totalStories)}</span>
           </div>
         )}
-
         {status === 'fallback' && (
           <aside className="newspaper__notice">{copy.fallback}</aside>
         )}
-
         {status !== 'loading' && totalStories > 0 && (
           <div className="newspaper__edition" lang={editionLanguage[activeEdition]}>
             {batches.map((batch, batchIndex) => (
@@ -425,7 +409,6 @@ function App() {
             ))}
           </div>
         )}
-
         {status !== 'loading' && totalStories === 0 && (
           <section className="newspaper__empty" aria-live="polite">
             <p>{copy.empty(activeLabel)}</p>
@@ -434,7 +417,6 @@ function App() {
             </button>
           </section>
         )}
-
         {hasMore && (
           <div className="edition-turn" ref={sentinelRef} aria-live="polite">
             <span>
@@ -444,7 +426,6 @@ function App() {
             <span className="edition-turn__label">{copy.nextThree}</span>
           </div>
         )}
-
         {editionComplete && (
           <footer className="newspaper__footer">
             <div className="newspaper__footer-count">
@@ -453,13 +434,11 @@ function App() {
                 ? copy.endOfEdition
                 : copy.endOfSection(activeLabel)}
             </div>
-
             <div className="newspaper__footer-message">
               <h2>{copy.footerTitle}</h2>
               <p>{copy.footerLead}</p>
               <span>{copy.footerReturn}</span>
             </div>
-
             <div className="newspaper__footer-meta">
               <span>{copy.footerSource}</span>
               <span>{copy.footerRules}</span>
@@ -468,7 +447,6 @@ function App() {
           </footer>
         )}
       </main>
-
       {edition && !preloaderVisible && (
         <button
           type="button"
@@ -492,5 +470,4 @@ function App() {
     </>
   );
 }
-
 export default App;

@@ -367,6 +367,18 @@ const spanishScienceKnowledgeVetoPatterns = [
     /\b(?:crisis|deterioro|declive|colapso|extinci[oó]n|p[eé]rdida|destrucci[oó]n|fracaso)\b/i,
     /\b(?:amenaza|amenazas|amenazan|peligro|da[ñn]o|da[ñn]os|riesgo)\b.{0,36}\b(?:aumenta|aumentan|crece|crecen|mayor|grave|severo|alto)\b/i,
     /\b(?:empeora|empeoran|se deteriora|se deterioran|cae|caen|disminuye|disminuyen|se reduce|se reducen)\b/i,
+    // Discovering a harmful biological threat is useful science, but the threat
+    // itself is not a positive outcome. A separate realized benefit must qualify it.
+    /\b(?:nuevo|nueva|nuevos|nuevas|emergente|emergentes|desconocid[oa]s?)\b.{0,32}\b(?:virus|pat[oó]genos?|enfermedades?|infecciones?|bacterias?|par[aá]sitos?|hongos?|toxinas?|brotes?|cepas?)\b/i,
+    /\b(?:virus|pat[oó]genos?|enfermedades?|infecciones?|bacterias?|par[aá]sitos?|hongos?|toxinas?|brotes?|cepas?)\b.{0,42}\b(?:infecta|infectan|infect[oó]|transmitid[oa]s?|contagia|contagian|causa|causan|provoca|provocan|se propaga|se propagan)\b/i,
+];
+
+// A discovery verb must not turn the discovery of a disease, pathogen or other
+// harmful biological entity into "good news". This veto is intentionally
+// bilingual because the same semantic failure can occur in either edition.
+const harmfulDiscoveryPatterns = [
+    /\b(?:discover(?:s|ed|ing)?|finds?|found|identif(?:y|ies|ied|ying)|detect(?:s|ed|ing)?|confirm(?:s|ed|ing)?|document(?:s|ed|ing)?|sequenc(?:e|es|ed|ing)|describ(?:e|es|ed|ing))\b.{0,120}\b(?:new|novel|emerging|previously unknown)?\s*(?:virus(?:es)?|pathogens?|diseases?|infections?|bacteri(?:a|um)|parasites?|fung(?:us|i)|toxins?|outbreaks?|strains?)\b/i,
+    /\b(?:descubren|descubri[oó]|descubrieron|hallan|hall[oó]|hallaron|identifican|identific[oó]|identificaron|detectan|detect[oó]|detectaron|confirman|confirm[oó]|confirmaron|documentan|document[oó]|documentaron|secuencian|secuenci[oó]|secuenciaron|describen|describi[oó]|describieron)\b.{0,120}\b(?:nuevo|nueva|nuevos|nuevas|emergente|emergentes|desconocid[oa]s?)?\s*(?:virus|pat[oó]genos?|enfermedades?|infecciones?|bacterias?|par[aá]sitos?|hongos?|toxinas?|brotes?|cepas?)\b/i,
 ];
 
 const realizedOutcomeByCategory = {
@@ -460,6 +472,20 @@ export const hasFalsePositiveSignal = ({
         mainContext,
     );
     if (speculativeOrPreliminary) return true;
+
+    // Finding a new harmful entity is a knowledge gain, not a beneficial outcome.
+    // It may still qualify when the same headline/deck reports a concrete,
+    // already-realized benefit such as prevention, treatment or harm reduction.
+    const harmfulDiscovery = matchesAny(harmfulDiscoveryPatterns, mainContext);
+    if (
+        harmfulDiscovery &&
+        !hasPositiveResolution(mainContext) &&
+        !matchesAny(genericRealizedOutcomePatterns, mainContext) &&
+        !matchesAny(publicBenefitOutcomePatterns, mainContext) &&
+        !matchesAny(healthBenefitClaimPatterns, mainContext)
+    ) {
+        return true;
+    }
 
     // Preclinical evidence is only a false positive when the story is framed
     // as a health benefit. A basic-science animal discovery can still qualify

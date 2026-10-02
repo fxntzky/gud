@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { NewsEdition } from '../types/news';
+import { EDITORIAL_RULESET_VERSION } from '../config/edition';
 import '../styles/controlRoom.scss';
 
 type Decision = {
@@ -8,12 +9,16 @@ type Decision = {
   ruleScore: number | null; mlLabel: string; mlScore: number | null;
   llm: { eligible: boolean | null; reason: string } | null; published: boolean;
 };
-type ReviewLabel = 'constructive' | 'not_constructive' | 'irrelevant';
+type ReviewLabel = 'constructive' | 'not_constructive' | 'irrelevant' | 'duplicate';
 type DraftLabel = ReviewLabel | 'clear';
 type ReviewDrafts = Record<string, Record<string, DraftLabel>>;
 const DRAFT_STORAGE_KEY = 'gud:editorial-drafts:v2';
+const PUBLICATION_SIGNAL_KEY = 'gud:publication-revision:v1';
+const publicEditionCacheKey = (date: string, edition: NewsEdition) =>
+  `gud:edition:${EDITORIAL_RULESET_VERSION}:${edition}:${date}`;
 const isReviewLabel = (value: unknown): value is ReviewLabel =>
-  value === 'constructive' || value === 'not_constructive' || value === 'irrelevant';
+  value === 'constructive' || value === 'not_constructive' ||
+  value === 'irrelevant' || value === 'duplicate';
 
 const readDrafts = (): ReviewDrafts => {
   try {
@@ -243,6 +248,18 @@ export function ControlRoom() {
       }
       const result = await response.json() as { saved: number; publication?: { count: number; curatedAt: string; articles: { id: string; url: string }[] } };
       if (result.saved !== changes.length) throw new Error('Unexpected save confirmation. Please reload to verify.');
+
+      // The public newspaper has its own fast local cache. Once the server confirms
+      // the curated snapshot, invalidate that copy and notify any already-open tab.
+      try {
+        window.localStorage.removeItem(publicEditionCacheKey(date, edition));
+        window.localStorage.setItem(PUBLICATION_SIGNAL_KEY, JSON.stringify({
+          date, edition, rulesetVersion: EDITORIAL_RULESET_VERSION, updatedAt: Date.now(),
+        }));
+      } catch {
+        // Storage may be unavailable in private mode. The server snapshot is still saved.
+      }
+
       setData((previous) => {
         if (!previous || previous.date !== date) return previous;
         const entry = previous.editions[edition];
@@ -367,7 +384,7 @@ export function ControlRoom() {
             </div>
             <section className="control-room__reviews" aria-labelledby="review-heading">
               <div className="control-room__reviews-heading"><div><span className="control-room__eyebrow">EDITORIAL AUDIT LOG</span><h2 id="review-heading">Review the decisions.</h2></div><span>{stats?.decisions?.length ?? 0} ARTICLES</span></div>
-              <p>Read the full source first. Your choices remain a local draft until SAVE. YES publishes or retains a story, NO removes it, IRRELEVANT removes it but remains positive for training. An unreviewed day stays automatic. Changes apply to today's shared edition only.</p>
+              <p>Read the full source first. Your choices remain a local draft until SAVE. YES publishes or retains a story, NO removes it, IRRELEVANT removes it but remains positive for training, and REPEATED removes an already-covered story without using it as classifier training. An unreviewed day stays automatic. Changes apply to today's shared edition only.</p>
               {stats?.input.explorationSampling && <p className="control-room__diagnostic-note">
                 <strong>LATAM DIAGNOSTIC SAMPLE · {stats.input.explorationSampling.selectedOutcome} MISSING OUTCOME + {stats.input.explorationSampling.selectedOther} OTHER REJECTIONS.</strong>{' '}
                 {stats.input.explorationSampling.sampledPublisherCount} sources · {stats.input.explorationSampling.sampledCategoryCount} categories.
@@ -411,7 +428,7 @@ export function ControlRoom() {
                 </div>
                 <div className="control-room__review-actions" role="group" aria-label={`Editorial review for ${item.title}`}>
                   <span>EDITORIAL DECISION · CLICK AGAIN TO CLEAR</span>
-                  {([['constructive', 'YES'], ['not_constructive', 'NO'], ['irrelevant', 'IRRELEVANT']] as const).map(([label, title]) => (
+                  {([['constructive', 'YES'], ['not_constructive', 'NO'], ['irrelevant', 'IRRELEVANT'], ['duplicate', 'REPEATED']] as const).map(([label, title]) => (
                     <button key={label} type="button" disabled={saving || busy}
                       className={selectedLabel(item.id) === label ? 'is-selected' : ''}
                       aria-pressed={selectedLabel(item.id) === label}

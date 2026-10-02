@@ -1,6 +1,7 @@
 // The positive/negative classifier and editorial interest are independent axes.
 // 'irrelevant' is a constructive story with low editorial relevance, NEVER a negative.
-export const REVIEW_LABELS = Object.freeze(['constructive', 'not_constructive', 'irrelevant', 'clear']);
+// 'duplicate' is editorial-only: the story may be constructive, but GUD already covered it.
+export const REVIEW_LABELS = Object.freeze(['constructive', 'not_constructive', 'irrelevant', 'duplicate', 'clear']);
 export const isReviewLabel = (value) => REVIEW_LABELS.includes(value);
 
 export function validateReviewBatch(reviews, eligibleIds) {
@@ -51,6 +52,8 @@ export function latestReviewRecords(rows) {
 }
 
 export function toTrainingRow(row) {
+  // Duplicate/repeated stories are deliberately excluded from classifier training.
+  // Their editorial problem is repetition, not positive-vs-negative classification.
   if (!row || !['constructive', 'not_constructive', 'irrelevant'].includes(row.label) ||
     typeof row.title !== 'string' || !row.title.trim()) return null;
   return {
