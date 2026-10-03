@@ -1,32 +1,42 @@
 import { createHash } from 'node:crypto';
+
 import {
     EDITION_LIMIT,
     EDITION_MIN_TARGET,
     EDITORIAL_RULESET_VERSION,
     FIRST_EDITION_DATE,
 } from '../server/edition.js';
+
 import { classifyCategory } from '../server/classifyCategory.js';
+
 import {
     enrichArticleImages,
     imageCandidatesFromFeedItem,
 } from '../server/imageResolver.js';
+
 import {
     hasDisqualifyingSignal,
     hasFalsePositiveSignal,
     hasQualifyingOutcome,
     scoreGoodNews,
 } from '../server/goodNewsScore.js';
+
 import {
     blockedPublisherDomains,
     getNewsSources,
 } from '../server/newsSources.js';
+
 import { fetchSourceItems } from '../server/sourceAdapters.js';
 import { editorialGuard } from '../server/classification/editorialGuard.js';
 import { classifyML, getMLStatus } from '../server/classification/mlClassifier.js';
 import { auditShortlist } from '../server/classification/llmAuditor.js';
 import { saveTelemetry } from '../server/learning/telemetryStore.js';
-import { retainLatamDiagnostic, selectLatamDiagnosticExploration } from '../server/learning/explorationSampler.js';
+import {
+    retainLatamDiagnostic,
+    selectLatamDiagnosticExploration,
+} from '../server/learning/explorationSampler.js';
 import { readCuratedEdition } from '../server/learning/curatedEditionStore.js';
+
 import {
     commitDailyEdition,
     readDailyEdition,
@@ -60,6 +70,7 @@ const cleanText = (value) => {
     if (!value) return undefined;
 
     const withoutHtml = value.replace(/<[^>]*>/g, ' ');
+
     const normalized = withoutHtml
         .replace(/&nbsp;/gi, ' ')
         .replace(/&amp;/gi, '&')
@@ -80,6 +91,7 @@ const truncate = (value) => {
     const shortened = value.slice(0, MAX_EXCERPT_LENGTH);
     const lastSpace = shortened.lastIndexOf(' ');
     const end = lastSpace > 0 ? lastSpace : MAX_EXCERPT_LENGTH;
+
     return `${shortened.slice(0, end).trim()}…`;
 };
 
@@ -89,24 +101,38 @@ const MIN_USEFUL_DECK_LENGTH = 55;
 
 const htmlAttribute = (tag, name) => {
     const match = tag.match(
-        new RegExp(`${name}\\s*=\\s*[\"']([^\"']+)[\"']`, 'i'),
+        new RegExp(`${name}\\s*=\\s*["']([^"']+)["']`, 'i'),
     );
+
     return match?.[1];
 };
 
 const extractMetaDeck = (html) => {
     const tags = html.match(/<meta\b[^>]*>/gi) ?? [];
-    const priorities = ['og:description', 'twitter:description', 'description'];
+    const priorities = [
+        'og:description',
+        'twitter:description',
+        'description',
+    ];
 
     for (const wanted of priorities) {
         for (const tag of tags) {
             const key = (
-                htmlAttribute(tag, 'property') ?? htmlAttribute(tag, 'name') ?? ''
+                htmlAttribute(tag, 'property') ??
+                htmlAttribute(tag, 'name') ??
+                ''
             ).toLowerCase();
+
             if (key !== wanted) continue;
 
-            const content = cleanText(htmlAttribute(tag, 'content'));
-            if (content && content.length >= MIN_USEFUL_DECK_LENGTH) {
+            const content = cleanText(
+                htmlAttribute(tag, 'content'),
+            );
+
+            if (
+                content &&
+                content.length >= MIN_USEFUL_DECK_LENGTH
+            ) {
                 return truncate(content);
             }
         }
@@ -118,49 +144,107 @@ const extractMetaDeck = (html) => {
 const readHtmlPrefix = async (response) => {
     if (!response.body?.getReader) {
         const text = await response.text();
-        return text.slice(0, PAGE_CONTEXT_MAX_BYTES);
+
+        return text.slice(
+            0,
+            PAGE_CONTEXT_MAX_BYTES,
+        );
     }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+
     let bytes = 0;
     let html = '';
 
     try {
-        while (bytes < PAGE_CONTEXT_MAX_BYTES) {
-            const { done, value } = await reader.read();
+        while (
+            bytes <
+            PAGE_CONTEXT_MAX_BYTES
+        ) {
+            const {
+                done,
+                value,
+            } = await reader.read();
+
             if (done) break;
+
             bytes += value.byteLength;
-            html += decoder.decode(value, { stream: true });
-            if (/<\/head>/i.test(html)) break;
+
+            html += decoder.decode(
+                value,
+                {
+                    stream: true,
+                },
+            );
+
+            if (/<\/head>/i.test(html)) {
+                break;
+            }
         }
+
         html += decoder.decode();
     } finally {
-        await reader.cancel().catch(() => undefined);
+        await reader
+            .cancel()
+            .catch(() => undefined);
     }
 
-    return html.slice(0, PAGE_CONTEXT_MAX_BYTES);
+    return html.slice(
+        0,
+        PAGE_CONTEXT_MAX_BYTES,
+    );
 };
 
 const fetchPageDeck = async (url) => {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), PAGE_CONTEXT_TIMEOUT_MS);
+    const controller =
+        new AbortController();
+
+    const timeout = setTimeout(
+        () => controller.abort(),
+        PAGE_CONTEXT_TIMEOUT_MS,
+    );
 
     try {
-        const response = await fetch(url, {
-            redirect: 'follow',
-            signal: controller.signal,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (compatible; GUD/0.8; +finite-edition-newspaper)',
-                Accept: 'text/html,application/xhtml+xml',
+        const response = await fetch(
+            url,
+            {
+                redirect: 'follow',
+                signal:
+                    controller.signal,
+
+                headers: {
+                    'User-Agent':
+                        'Mozilla/5.0 (compatible; GUD/0.8; +finite-edition-newspaper)',
+
+                    Accept:
+                        'text/html,application/xhtml+xml',
+                },
             },
-        });
+        );
 
-        if (!response.ok) return undefined;
-        const contentType = response.headers.get('content-type') ?? '';
-        if (!contentType.includes('text/html')) return undefined;
+        if (!response.ok) {
+            return undefined;
+        }
 
-        return extractMetaDeck(await readHtmlPrefix(response));
+        const contentType =
+            response.headers.get(
+                'content-type',
+            ) ?? '';
+
+        if (
+            !contentType.includes(
+                'text/html',
+            )
+        ) {
+            return undefined;
+        }
+
+        return extractMetaDeck(
+            await readHtmlPrefix(
+                response,
+            ),
+        );
     } catch {
         return undefined;
     } finally {
@@ -168,33 +252,71 @@ const fetchPageDeck = async (url) => {
     }
 };
 
-const resolveEditorialContext = async (item, link) => {
-    const summary = truncate(cleanText(item.summary));
-    const snippet = truncate(cleanText(item.contentSnippet));
-    const content = truncate(cleanText(item.content ?? item.contentEncoded));
+const resolveEditorialContext =
+    async (item, link) => {
+        const summary = truncate(
+            cleanText(item.summary),
+        );
 
-    let deck = summary ?? snippet;
-    let excerpt = snippet ?? content ?? summary;
+        const snippet = truncate(
+            cleanText(
+                item.contentSnippet,
+            ),
+        );
 
-    // Most RSS feeds expose the deck as summary/contentSnippet. When they do not,
-    // read only the article <head> and use its description metadata. We never
-    // download the full article body for editorial classification.
-    if (!deck || deck.length < MIN_USEFUL_DECK_LENGTH) {
-        const pageDeck = await fetchPageDeck(link);
-        if (pageDeck) deck = pageDeck;
-    }
+        const content = truncate(
+            cleanText(
+                item.content ??
+                    item.contentEncoded,
+            ),
+        );
 
-    if (!excerpt) excerpt = deck;
+        let deck =
+            summary ?? snippet;
 
-    return {
-        deck: deck ?? excerpt,
-        excerpt,
+        let excerpt =
+            snippet ??
+            content ??
+            summary;
+
+        // Most RSS feeds expose the deck as summary/contentSnippet. When they do not,
+        // read only the article <head> and use its description metadata. We never
+        // download the full article body for editorial classification.
+        if (
+            !deck ||
+            deck.length <
+                MIN_USEFUL_DECK_LENGTH
+        ) {
+            const pageDeck =
+                await fetchPageDeck(
+                    link,
+                );
+
+            if (pageDeck) {
+                deck = pageDeck;
+            }
+        }
+
+        if (!excerpt) {
+            excerpt = deck;
+        }
+
+        return {
+            deck: deck ?? excerpt,
+            excerpt,
+        };
     };
-};
 
-const makeId = (language, source, title, link) =>
+const makeId = (
+    language,
+    source,
+    title,
+    link,
+) =>
     createHash('sha1')
-        .update(`${language}|${source}|${title}|${link}`)
+        .update(
+            `${language}|${source}|${title}|${link}`,
+        )
         .digest('hex');
 
 const validHttpUrl = (value) => {
@@ -202,21 +324,50 @@ const validHttpUrl = (value) => {
 
     try {
         const url = new URL(value);
-        if (!['http:', 'https:'].includes(url.protocol)) return undefined;
+
+        if (
+            ![
+                'http:',
+                'https:',
+            ].includes(url.protocol)
+        ) {
+            return undefined;
+        }
+
         return url.href;
     } catch {
         return undefined;
     }
 };
 
-const hostnameMatches = (hostname, domain) =>
-    hostname === domain || hostname.endsWith(`.${domain}`);
+const hostnameMatches = (
+    hostname,
+    domain,
+) =>
+    hostname === domain ||
+    hostname.endsWith(
+        `.${domain}`,
+    );
 
-const isBlockedPublisherUrl = (value) => {
+const isBlockedPublisherUrl = (
+    value,
+) => {
     try {
-        const hostname = new URL(value).hostname.toLowerCase().replace(/^www\./, '');
-        return blockedPublisherDomains.some((domain) =>
-            hostnameMatches(hostname, domain),
+        const hostname =
+            new URL(value)
+                .hostname
+                .toLowerCase()
+                .replace(
+                    /^www\./,
+                    '',
+                );
+
+        return blockedPublisherDomains.some(
+            (domain) =>
+                hostnameMatches(
+                    hostname,
+                    domain,
+                ),
         );
     } catch {
         return true;
@@ -227,138 +378,428 @@ const normalizeText = (value) =>
     value
         .toLowerCase()
         .normalize('NFKD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(
+            /[\u0300-\u036f]/g,
+            '',
+        )
+        .replace(
+            /[^a-z0-9\s]/g,
+            ' ',
+        )
         .replace(/\s+/g, ' ')
         .trim();
 
 const stopWords = new Set([
     // English
-    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'has',
-    'have', 'how', 'in', 'is', 'it', 'its', 'new', 'of', 'on', 'that', 'the',
-    'this', 'to', 'with', 'after', 'before',
+    'a',
+    'an',
+    'and',
+    'are',
+    'as',
+    'at',
+    'be',
+    'by',
+    'for',
+    'from',
+    'has',
+    'have',
+    'how',
+    'in',
+    'is',
+    'it',
+    'its',
+    'new',
+    'of',
+    'on',
+    'that',
+    'the',
+    'this',
+    'to',
+    'with',
+    'after',
+    'before',
+
     // Spanish
-    'al', 'como', 'con', 'de', 'del', 'el', 'en', 'es', 'esta', 'este', 'la',
-    'las', 'lo', 'los', 'mas', 'para', 'por', 'que', 'se', 'su', 'sus', 'un',
-    'una', 'y', 'tras',
+    'al',
+    'como',
+    'con',
+    'de',
+    'del',
+    'el',
+    'en',
+    'es',
+    'esta',
+    'este',
+    'la',
+    'las',
+    'lo',
+    'los',
+    'mas',
+    'para',
+    'por',
+    'que',
+    'se',
+    'su',
+    'sus',
+    'un',
+    'una',
+    'y',
+    'tras',
 ]);
 
-const canonicalToken = (token) => {
-    if (/^(?:fail|fails|failed|failing|failure|fracasa|fracaso|falla|fallo|fallida|fallido)$/.test(token)) return 'fail';
-    if (/^(?:rescue|rescues|rescued|rescuing|rescate|rescata|rescatan|rescato|rescatado|rescatada)$/.test(token)) return 'rescue';
-    if (/^(?:return|returns|returned|returning|regresa|regreso|vuelve|volvio)$/.test(token)) return 'return';
-    if (/^(?:aging|ageing|envejecido|envejecida)$/.test(token)) return 'aging';
-    if (/^(?:spacecraft|spaceship|nave|aeronave)$/.test(token)) return 'spacecraft';
-    if (/^(?:telescope|telescopio)$/.test(token)) return 'telescope';
-    if (/^(?:mission|missions|mision|misiones)$/.test(token)) return 'mission';
-    if (/^(?:earth|tierra)$/.test(token)) return 'earth';
-    if (/^(?:restore|restores|restored|restoring|restaurar|restaura|restauro|restaurado)$/.test(token)) return 'restore';
-    if (/^(?:recover|recovers|recovered|recovering|recupera|recupero|recuperado)$/.test(token)) return 'recover';
+const canonicalToken = (
+    token,
+) => {
+    if (
+        /^(?:fail|fails|failed|failing|failure|fracasa|fracaso|falla|fallo|fallida|fallido)$/.test(
+            token,
+        )
+    ) {
+        return 'fail';
+    }
+
+    if (
+        /^(?:rescue|rescues|rescued|rescuing|rescate|rescata|rescatan|rescato|rescatado|rescatada)$/.test(
+            token,
+        )
+    ) {
+        return 'rescue';
+    }
+
+    if (
+        /^(?:return|returns|returned|returning|regresa|regreso|vuelve|volvio)$/.test(
+            token,
+        )
+    ) {
+        return 'return';
+    }
+
+    if (
+        /^(?:aging|ageing|envejecido|envejecida)$/.test(
+            token,
+        )
+    ) {
+        return 'aging';
+    }
+
+    if (
+        /^(?:spacecraft|spaceship|nave|aeronave)$/.test(
+            token,
+        )
+    ) {
+        return 'spacecraft';
+    }
+
+    if (
+        /^(?:telescope|telescopio)$/.test(
+            token,
+        )
+    ) {
+        return 'telescope';
+    }
+
+    if (
+        /^(?:mission|missions|mision|misiones)$/.test(
+            token,
+        )
+    ) {
+        return 'mission';
+    }
+
+    if (
+        /^(?:earth|tierra)$/.test(
+            token,
+        )
+    ) {
+        return 'earth';
+    }
+
+    if (
+        /^(?:restore|restores|restored|restoring|restaurar|restaura|restauro|restaurado)$/.test(
+            token,
+        )
+    ) {
+        return 'restore';
+    }
+
+    if (
+        /^(?:recover|recovers|recovered|recovering|recupera|recupero|recuperado)$/.test(
+            token,
+        )
+    ) {
+        return 'recover';
+    }
+
     return token;
 };
 
-const normalizedTokens = (value) =>
+const normalizedTokens = (
+    value,
+) =>
     normalizeText(value)
         .split(/\s+/)
-        .filter((token) => token.length > 1 && !stopWords.has(token))
+        .filter(
+            (token) =>
+                token.length > 1 &&
+                !stopWords.has(
+                    token,
+                ),
+        )
         .map(canonicalToken);
 
-const storySimilarity = (left, right) => {
-    if (left.length === 0 || right.length === 0) return 0;
+const storySimilarity = (
+    left,
+    right,
+) => {
+    if (
+        left.length === 0 ||
+        right.length === 0
+    ) {
+        return 0;
+    }
 
     const a = new Set(left);
     const b = new Set(right);
+
     let intersection = 0;
 
     for (const token of a) {
-        if (b.has(token)) intersection += 1;
+        if (b.has(token)) {
+            intersection += 1;
+        }
     }
 
-    if (intersection === 0) return 0;
+    if (
+        intersection === 0
+    ) {
+        return 0;
+    }
 
-    const union = new Set([...a, ...b]).size;
-    const jaccard = intersection / union;
-    const containment = intersection / Math.min(a.size, b.size);
+    const union =
+        new Set([
+            ...a,
+            ...b,
+        ]).size;
 
-    if (intersection >= 4 && containment >= 0.58) {
-        return Math.max(jaccard, STORY_SIMILARITY_THRESHOLD);
+    const jaccard =
+        intersection / union;
+
+    const containment =
+        intersection /
+        Math.min(
+            a.size,
+            b.size,
+        );
+
+    if (
+        intersection >= 4 &&
+        containment >= 0.58
+    ) {
+        return Math.max(
+            jaccard,
+            STORY_SIMILARITY_THRESHOLD,
+        );
     }
 
     return jaccard;
 };
 
-const storiesMatch = (article, acceptedArticle) =>
-    storySimilarity(article.titleTokens, acceptedArticle.titleTokens) >=
+const storiesMatch = (
+    article,
+    acceptedArticle,
+) =>
+    storySimilarity(
+        article.titleTokens,
+        acceptedArticle.titleTokens,
+    ) >=
     STORY_SIMILARITY_THRESHOLD;
 
+const getRequestedEdition = (
+    req,
+) => {
+    const requested =
+        Array.isArray(
+            req.query.edition,
+        )
+            ? req.query.edition[0]
+            : req.query.edition;
 
-const getRequestedEdition = (req) => {
-    const requested = Array.isArray(req.query.edition)
-        ? req.query.edition[0]
-        : req.query.edition;
-
-    if (SUPPORTED_EDITIONS.has(requested)) return requested;
+    if (
+        SUPPORTED_EDITIONS.has(
+            requested,
+        )
+    ) {
+        return requested;
+    }
 
     // Legacy v5 URLs remain readable during the migration.
-    const legacyLanguage = Array.isArray(req.query.lang)
-        ? req.query.lang[0]
-        : req.query.lang;
-    return legacyLanguage === 'es' ? 'latam' : 'english';
+    const legacyLanguage =
+        Array.isArray(
+            req.query.lang,
+        )
+            ? req.query.lang[0]
+            : req.query.lang;
+
+    return legacyLanguage ===
+        'es'
+        ? 'latam'
+        : 'english';
 };
 
-const languageForEdition = (edition) =>
-    edition === 'latam' ? 'es' : 'en';
+const languageForEdition = (
+    edition,
+) =>
+    edition === 'latam'
+        ? 'es'
+        : 'en';
 
-const utcDateKey = (date = new Date()) => date.toISOString().slice(0, 10);
+const utcDateKey = (
+    date = new Date(),
+) =>
+    date
+        .toISOString()
+        .slice(0, 10);
 
 const getEditionDate = (req) => {
     const today = utcDateKey();
-    const requestedDate = Array.isArray(req.query.date)
-        ? req.query.date[0]
-        : req.query.date;
-    const legacyEditionParam = Array.isArray(req.query.edition)
-        ? req.query.edition[0]
-        : req.query.edition;
-    const requested = requestedDate ??
-        (/^\d{4}-\d{2}-\d{2}$/.test(legacyEditionParam ?? '')
+
+    const requestedDate =
+        Array.isArray(
+            req.query.date,
+        )
+            ? req.query.date[0]
+            : req.query.date;
+
+    const legacyEditionParam =
+        Array.isArray(
+            req.query.edition,
+        )
+            ? req.query.edition[0]
+            : req.query.edition;
+
+    const requested =
+        requestedDate ??
+        (/^\d{4}-\d{2}-\d{2}$/.test(
+            legacyEditionParam ??
+                '',
+        )
             ? legacyEditionParam
             : undefined);
 
-    return requested === today ? requested : today;
+    return requested === today
+        ? requested
+        : today;
 };
 
-const editionCutoffMs = (editionDate) => {
+const editionCutoffMs = (
+    editionDate,
+) => {
     const today = utcDateKey();
-    if (editionDate === today) return Date.now();
-    return Date.parse(`${editionDate}T23:59:59.999Z`);
+
+    if (
+        editionDate === today
+    ) {
+        return Date.now();
+    }
+
+    return Date.parse(
+        `${editionDate}T23:59:59.999Z`,
+    );
 };
 
-const editionWindow = (editionDate) => {
-    const end = editionCutoffMs(editionDate);
-    const start = end - MAX_LOOKBACK_HOURS * 60 * 60 * 1000;
-    return { start, end };
+const editionWindow = (
+    editionDate,
+) => {
+    const end =
+        editionCutoffMs(
+            editionDate,
+        );
+
+    const start =
+        end -
+        MAX_LOOKBACK_HOURS *
+            60 *
+            60 *
+            1000;
+
+    return {
+        start,
+        end,
+    };
 };
 
-const isInEditionWindow = (value, editionDate) => {
-    const timestamp = new Date(value).getTime();
-    if (Number.isNaN(timestamp)) return false;
+const isInEditionWindow = (
+    value,
+    editionDate,
+) => {
+    const timestamp =
+        new Date(
+            value,
+        ).getTime();
 
-    const { start, end } = editionWindow(editionDate);
-    return timestamp >= start && timestamp < end;
+    if (
+        Number.isNaN(
+            timestamp,
+        )
+    ) {
+        return false;
+    }
+
+    const {
+        start,
+        end,
+    } =
+        editionWindow(
+            editionDate,
+        );
+
+    return (
+        timestamp >= start &&
+        timestamp < end
+    );
 };
 
-const issueNumberForDate = (editionDate) => {
-    const first = Date.parse(`${FIRST_EDITION_DATE}T00:00:00.000Z`);
-    const current = Date.parse(`${editionDate}T00:00:00.000Z`);
+const issueNumberForDate = (
+    editionDate,
+) => {
+    const first = Date.parse(
+        `${FIRST_EDITION_DATE}T00:00:00.000Z`,
+    );
 
-    if (Number.isNaN(first) || Number.isNaN(current) || current < first) return 1;
-    return Math.floor((current - first) / 86_400_000) + 1;
+    const current =
+        Date.parse(
+            `${editionDate}T00:00:00.000Z`,
+        );
+
+    if (
+        Number.isNaN(first) ||
+        Number.isNaN(
+            current,
+        ) ||
+        current < first
+    ) {
+        return 1;
+    }
+
+    return (
+        Math.floor(
+            (current -
+                first) /
+                86_400_000,
+        ) + 1
+    );
 };
 
-const deterministicTieBreak = (editionDate, language, id) =>
+const deterministicTieBreak = (
+    editionDate,
+    language,
+    id,
+) =>
     Number.parseInt(
         createHash('sha1')
-            .update(`${editionDate}|${language}|${id}`)
+            .update(
+                `${editionDate}|${language}|${id}`,
+            )
             .digest('hex')
             .slice(0, 8),
         16,
@@ -366,562 +807,1782 @@ const deterministicTieBreak = (editionDate, language, id) =>
 
 const toArticle = ({
     sourceId: _sourceId,
-    publisherDomain: _publisherDomain,
-    sourcePriority: _sourcePriority,
-    titleTokens: _titleTokens,
+    publisherDomain:
+        _publisherDomain,
+    sourcePriority:
+        _sourcePriority,
+    titleTokens:
+        _titleTokens,
     deck: _deck,
     ml: _ml,
     ruleScore: _ruleScore,
     ...article
 }) => article;
 
-const buildSourceCandidates = async (source, editionDate, language) => {
-    const sourceItems = await fetchSourceItems(source);
-    const rejected = emptyRejections();
-    const candidates = [];
-    const exploration = [];
-    let mlScored = 0;
-    const captureExploration = ({ item, title, link, deck, category, ml, reason }) => {
-        // Exploration is private diagnostic evidence, never sent to the LLM
-        // or automatically published. LATAM needs coverage beyond high ML scores.
-        if (language !== 'es' && (exploration.length >= 3 || (ml.confidence ?? 0) < 0.55)) return;
-        const entry = {
-            id: makeId(language, source.name, title, link), title,
-            url: link, publishedAt: new Date(item.isoDate ?? item.pubDate).toISOString(),
-            imageCandidates: imageCandidatesFromFeedItem(item, link),
-            deck: String(deck || '').slice(0, 360), source: source.name,
-            category, mlLabel: ml.label, mlScore: ml.confidence,
-            reason, sourceId: source.id,
-        };
-        if (language === 'es') retainLatamDiagnostic(exploration, entry, editionDate);
-        else exploration.push(entry);
-    };
+const buildSourceCandidates =
+    async (
+        source,
+        editionDate,
+        language,
+    ) => {
+        const sourceItems =
+            await fetchSourceItems(
+                source,
+            );
 
-    for (const item of sourceItems) {
-        const title = cleanText(item.title);
-        const link = validHttpUrl(item.link);
-        const publishedAt = item.isoDate ?? item.pubDate;
+        const rejected =
+            emptyRejections();
 
-        if (!title || !link || !publishedAt) {
-            rejected.invalid += 1;
-            continue;
-        }
+        const candidates = [];
+        const exploration = [];
 
-        if (isBlockedPublisherUrl(link)) {
-            rejected.blocked += 1;
-            continue;
-        }
+        let mlScored = 0;
 
-        if (!isInEditionWindow(publishedAt, editionDate)) {
-            rejected.outOfWindow += 1;
-            continue;
-        }
+        const captureExploration =
+            ({
+                item,
+                title,
+                link,
+                deck,
+                category,
+                ml,
+                reason,
+            }) => {
+                // Exploration is private diagnostic evidence, never sent to the LLM
+                // or automatically published. LATAM needs coverage beyond high ML scores.
+                if (
+                    language !==
+                        'es' &&
+                    (exploration.length >=
+                        3 ||
+                        (ml.confidence ??
+                            0) <
+                            0.55)
+                ) {
+                    return;
+                }
 
-        // Cheap title-only veto first. This avoids fetching page metadata for
-        // stories that are already clearly outside GUD's editorial scope.
-        if (hasDisqualifyingSignal(title, title, '')) {
-            rejected.disqualified += 1;
-            continue;
-        }
-
-        // Direction-specific veto is evaluated before generic positive vocabulary.
-        if (editorialGuard({ title })) {
-            rejected.editorialGuard += 1;
-            continue;
-        }
-        const { deck, excerpt } = await resolveEditorialContext(item, link);
-        if (editorialGuard({ title, deck })) {
-            rejected.editorialGuard += 1;
-            continue;
-        }
-        const searchableText = [title, deck, excerpt]
-            .filter(Boolean)
-            .join(' ');
-
-        if (hasDisqualifyingSignal(searchableText, title, deck)) {
-            rejected.disqualified += 1;
-            continue;
-        }
-
-        const category = classifyCategory(searchableText, source.category);
-        const ml = classifyML({ title, deck });
-        mlScored += 1;
-        const mode = getMLStatus().mode;
-        const input = { title, deck, excerpt, category };
-
-        if (hasFalsePositiveSignal(input)) {
-            rejected.falsePositive += 1;
-            captureExploration({ item, title, link, deck, category, ml, reason: 'legacy_false_positive' });
-            continue;
-        }
-
-        // Lexical eligibility is a baseline, not a permanent ceiling. A future
-        // independently validated local model may rescue unseen constructions.
-        // The synthetic bootstrap cannot admit them into the edition.
-        const qualifying = hasQualifyingOutcome(input);
-        const ruleScore = scoreGoodNews(searchableText, title, deck);
-        const mlRescue = mode === 'validated-filter' && (ml.confidence ?? 0) >= 0.93;
-        if (!qualifying && !mlRescue) {
-            rejected.noPositiveOutcome += 1;
-            captureExploration({ item, title, link, deck, category, ml, reason: 'missing_legacy_outcome' });
-            continue;
-        }
-        if (ruleScore < MIN_SCORE && !mlRescue) {
-            rejected.belowScore += 1;
-            captureExploration({ item, title, link, deck, category, ml, reason: 'below_rule_score' });
-            continue;
-        }
-        if (mode === 'validated-filter' && (ml.confidence ?? 0) < 0.08) {
-            rejected.ml += 1;
-            continue;
-        }
-        const score = Math.max(ruleScore, mlRescue ? MIN_SCORE : ruleScore);
-        const imageCandidates = imageCandidatesFromFeedItem(item, link);
-
-        candidates.push({
-            id: makeId(language, source.name, title, link),
-            title,
-            url: link,
-            source: source.name,
-            publishedAt: new Date(publishedAt).toISOString(),
-            category,
-            language,
-            excerpt,
-            deck,
-            ml,
-            ruleScore,
-            imageCandidates,
-            imageUrl: imageCandidates[0],
-            score: score + (typeof ml.confidence === 'number'
-                ? (ml.confidence - 0.5) * 4 : 0),
-            sourceId: source.id,
-            publisherDomain: source.publisherDomain,
-            sourcePriority: source.priority,
-            titleTokens: normalizedTokens(title),
-        });
-    }
-
-    return {
-        candidates,
-        diagnostics: {
-            sourceId: source.id,
-            source: source.name,
-            feedItems: sourceItems.length,
-            candidates: candidates.length,
-            mlScored,
-            exploration,
-            rejected,
-        },
-    };
-};
-
-const fetchSourcesWithConcurrency = async (newsSources, editionDate, language) => {
-    const results = new Array(newsSources.length);
-    let nextIndex = 0;
-
-    const worker = async () => {
-        while (true) {
-            const index = nextIndex;
-            nextIndex += 1;
-            if (index >= newsSources.length) return;
-
-            try {
-                results[index] = {
-                    status: 'fulfilled',
-                    value: await buildSourceCandidates(
-                        newsSources[index],
-                        editionDate,
+                const entry = {
+                    id: makeId(
                         language,
+                        source.name,
+                        title,
+                        link,
                     ),
+
+                    title,
+
+                    url: link,
+
+                    publishedAt:
+                        new Date(
+                            item.isoDate ??
+                                item.pubDate,
+                        ).toISOString(),
+
+                    imageCandidates:
+                        imageCandidatesFromFeedItem(
+                            item,
+                            link,
+                        ),
+
+                    deck: String(
+                        deck || '',
+                    ).slice(
+                        0,
+                        360,
+                    ),
+
+                    source:
+                        source.name,
+
+                    category,
+
+                    mlLabel:
+                        ml.label,
+
+                    mlScore:
+                        ml.confidence,
+
+                    reason,
+
+                    sourceId:
+                        source.id,
                 };
-            } catch (reason) {
-                results[index] = { status: 'rejected', reason };
+
+                if (
+                    language ===
+                    'es'
+                ) {
+                    retainLatamDiagnostic(
+                        exploration,
+                        entry,
+                        editionDate,
+                    );
+                } else {
+                    exploration.push(
+                        entry,
+                    );
+                }
+            };
+
+        for (
+            const item of
+            sourceItems
+        ) {
+            const title =
+                cleanText(
+                    item.title,
+                );
+
+            const link =
+                validHttpUrl(
+                    item.link,
+                );
+
+            const publishedAt =
+                item.isoDate ??
+                item.pubDate;
+
+            if (
+                !title ||
+                !link ||
+                !publishedAt
+            ) {
+                rejected.invalid +=
+                    1;
+
+                continue;
             }
+
+            if (
+                isBlockedPublisherUrl(
+                    link,
+                )
+            ) {
+                rejected.blocked +=
+                    1;
+
+                continue;
+            }
+
+            if (
+                !isInEditionWindow(
+                    publishedAt,
+                    editionDate,
+                )
+            ) {
+                rejected.outOfWindow +=
+                    1;
+
+                continue;
+            }
+
+            // Cheap title-only veto first. This avoids fetching page metadata for
+            // stories that are already clearly outside GUD's editorial scope.
+            if (
+                hasDisqualifyingSignal(
+                    title,
+                    title,
+                    '',
+                )
+            ) {
+                rejected.disqualified +=
+                    1;
+
+                continue;
+            }
+
+            // Direction-specific veto is evaluated before generic positive vocabulary.
+            if (
+                editorialGuard({
+                    title,
+                })
+            ) {
+                rejected.editorialGuard +=
+                    1;
+
+                continue;
+            }
+
+            const {
+                deck,
+                excerpt,
+            } =
+                await resolveEditorialContext(
+                    item,
+                    link,
+                );
+
+            if (
+                editorialGuard({
+                    title,
+                    deck,
+                })
+            ) {
+                rejected.editorialGuard +=
+                    1;
+
+                continue;
+            }
+
+            const searchableText =
+                [
+                    title,
+                    deck,
+                    excerpt,
+                ]
+                    .filter(
+                        Boolean,
+                    )
+                    .join(' ');
+
+            if (
+                hasDisqualifyingSignal(
+                    searchableText,
+                    title,
+                    deck,
+                )
+            ) {
+                rejected.disqualified +=
+                    1;
+
+                continue;
+            }
+
+            const category =
+                classifyCategory(
+                    searchableText,
+                    source.category,
+                );
+
+            const ml =
+                classifyML({
+                    title,
+                    deck,
+                });
+
+            mlScored += 1;
+
+            const mode =
+                getMLStatus().mode;
+
+            const input = {
+                title,
+                deck,
+                excerpt,
+                category,
+            };
+
+            if (
+                hasFalsePositiveSignal(
+                    input,
+                )
+            ) {
+                rejected.falsePositive +=
+                    1;
+
+                captureExploration({
+                    item,
+                    title,
+                    link,
+                    deck,
+                    category,
+                    ml,
+                    reason:
+                        'legacy_false_positive',
+                });
+
+                continue;
+            }
+
+            // Lexical eligibility is a baseline, not a permanent ceiling. A future
+            // independently validated local model may rescue unseen constructions.
+            // The synthetic bootstrap cannot admit them into the edition.
+            const qualifying =
+                hasQualifyingOutcome(
+                    input,
+                );
+
+            const ruleScore =
+                scoreGoodNews(
+                    searchableText,
+                    title,
+                    deck,
+                );
+
+            const mlRescue =
+                mode ===
+                    'validated-filter' &&
+                (ml.confidence ??
+                    0) >= 0.93;
+
+            if (
+                !qualifying &&
+                !mlRescue
+            ) {
+                rejected.noPositiveOutcome +=
+                    1;
+
+                captureExploration({
+                    item,
+                    title,
+                    link,
+                    deck,
+                    category,
+                    ml,
+                    reason:
+                        'missing_legacy_outcome',
+                });
+
+                continue;
+            }
+
+            if (
+                ruleScore <
+                    MIN_SCORE &&
+                !mlRescue
+            ) {
+                rejected.belowScore +=
+                    1;
+
+                captureExploration({
+                    item,
+                    title,
+                    link,
+                    deck,
+                    category,
+                    ml,
+                    reason:
+                        'below_rule_score',
+                });
+
+                continue;
+            }
+
+            if (
+                mode ===
+                    'validated-filter' &&
+                (ml.confidence ??
+                    0) < 0.08
+            ) {
+                rejected.ml += 1;
+
+                continue;
+            }
+
+            const score =
+                Math.max(
+                    ruleScore,
+                    mlRescue
+                        ? MIN_SCORE
+                        : ruleScore,
+                );
+
+            const imageCandidates =
+                imageCandidatesFromFeedItem(
+                    item,
+                    link,
+                );
+
+            candidates.push({
+                id: makeId(
+                    language,
+                    source.name,
+                    title,
+                    link,
+                ),
+
+                title,
+                url: link,
+
+                source:
+                    source.name,
+
+                publishedAt:
+                    new Date(
+                        publishedAt,
+                    ).toISOString(),
+
+                category,
+                language,
+                excerpt,
+                deck,
+                ml,
+                ruleScore,
+                imageCandidates,
+
+                imageUrl:
+                    imageCandidates[0],
+
+                score:
+                    score +
+                    (typeof ml.confidence ===
+                    'number'
+                        ? (ml.confidence -
+                              0.5) *
+                          4
+                        : 0),
+
+                sourceId:
+                    source.id,
+
+                publisherDomain:
+                    source.publisherDomain,
+
+                sourcePriority:
+                    source.priority,
+
+                titleTokens:
+                    normalizedTokens(
+                        title,
+                    ),
+            });
         }
+
+        return {
+            candidates,
+
+            diagnostics: {
+                sourceId:
+                    source.id,
+
+                source:
+                    source.name,
+
+                feedItems:
+                    sourceItems.length,
+
+                candidates:
+                    candidates.length,
+
+                mlScored,
+                exploration,
+                rejected,
+            },
+        };
     };
 
-    const workerCount = Math.min(SOURCE_CONCURRENCY, newsSources.length);
-    await Promise.all(Array.from({ length: workerCount }, () => worker()));
-    return results;
-};
+const fetchSourcesWithConcurrency =
+    async (
+        newsSources,
+        editionDate,
+        language,
+    ) => {
+        const results =
+            new Array(
+                newsSources.length,
+            );
 
-const ageHoursAtEditionCutoff = (publishedAt, editionDate) => {
-    const published = new Date(publishedAt).getTime();
-    const cutoff = editionCutoffMs(editionDate);
-    if (Number.isNaN(published) || Number.isNaN(cutoff)) {
-        return Number.POSITIVE_INFINITY;
-    }
-    return Math.max(0, (cutoff - published) / 3_600_000);
-};
+        let nextIndex = 0;
 
-const buildEdition = (candidates, editionDate, language, limit = EDITION_LIMIT) => {
-    const ranked = [...candidates].sort((a, b) => {
-        const totalA = a.score + a.sourcePriority;
-        const totalB = b.score + b.sourcePriority;
-        if (totalB !== totalA) return totalB - totalA;
+        const worker =
+            async () => {
+                while (true) {
+                    const index =
+                        nextIndex;
+
+                    nextIndex += 1;
+
+                    if (
+                        index >=
+                        newsSources.length
+                    ) {
+                        return;
+                    }
+
+                    try {
+                        results[index] =
+                            {
+                                status:
+                                    'fulfilled',
+
+                                value:
+                                    await buildSourceCandidates(
+                                        newsSources[
+                                            index
+                                        ],
+                                        editionDate,
+                                        language,
+                                    ),
+                            };
+                    } catch (
+                        reason
+                    ) {
+                        results[index] =
+                            {
+                                status:
+                                    'rejected',
+
+                                reason,
+                            };
+                    }
+                }
+            };
+
+        const workerCount =
+            Math.min(
+                SOURCE_CONCURRENCY,
+                newsSources.length,
+            );
+
+        await Promise.all(
+            Array.from(
+                {
+                    length:
+                        workerCount,
+                },
+                () => worker(),
+            ),
+        );
+
+        return results;
+    };
+
+const ageHoursAtEditionCutoff =
+    (
+        publishedAt,
+        editionDate,
+    ) => {
+        const published =
+            new Date(
+                publishedAt,
+            ).getTime();
+
+        const cutoff =
+            editionCutoffMs(
+                editionDate,
+            );
+
+        if (
+            Number.isNaN(
+                published,
+            ) ||
+            Number.isNaN(
+                cutoff,
+            )
+        ) {
+            return Number.POSITIVE_INFINITY;
+        }
+
+        return Math.max(
+            0,
+            (cutoff -
+                published) /
+                3_600_000,
+        );
+    };
+
+const buildEdition = (
+    candidates,
+    editionDate,
+    language,
+    limit = EDITION_LIMIT,
+) => {
+    const ranked = [
+        ...candidates,
+    ].sort((a, b) => {
+        const totalA =
+            a.score +
+            a.sourcePriority;
+
+        const totalB =
+            b.score +
+            b.sourcePriority;
+
+        if (
+            totalB !== totalA
+        ) {
+            return (
+                totalB -
+                totalA
+            );
+        }
 
         const publishedDelta =
-            new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime();
-        if (publishedDelta !== 0) return publishedDelta;
+            new Date(
+                b.publishedAt,
+            ).getTime() -
+            new Date(
+                a.publishedAt,
+            ).getTime();
+
+        if (
+            publishedDelta !==
+            0
+        ) {
+            return publishedDelta;
+        }
 
         return (
-            deterministicTieBreak(editionDate, language, b.id) -
-            deterministicTieBreak(editionDate, language, a.id)
+            deterministicTieBreak(
+                editionDate,
+                language,
+                b.id,
+            ) -
+            deterministicTieBreak(
+                editionDate,
+                language,
+                a.id,
+            )
         );
     });
 
     const accepted = [];
-    const usedSources = new Set();
-    const usedPublisherDomains = new Set();
-    const categoryCounts = new Map();
 
-    const canAccept = (article, enforceCategoryCap) => {
-        if (usedSources.has(article.sourceId)) return false;
-        if (usedPublisherDomains.has(article.publisherDomain)) return false;
+    const usedSources =
+        new Set();
 
+    const usedPublisherDomains =
+        new Set();
+
+    const categoryCounts =
+        new Map();
+
+    const canAccept = (
+        article,
+        enforceCategoryCap,
+    ) => {
         if (
-            enforceCategoryCap &&
-            (categoryCounts.get(article.category) ?? 0) >= CATEGORY_SOFT_CAP
+            usedSources.has(
+                article.sourceId,
+            )
         ) {
             return false;
         }
 
-        return !accepted.some((other) => storiesMatch(article, other));
-    };
+        if (
+            usedPublisherDomains.has(
+                article.publisherDomain,
+            )
+        ) {
+            return false;
+        }
 
-    const accept = (article) => {
-        accepted.push(article);
-        usedSources.add(article.sourceId);
-        usedPublisherDomains.add(article.publisherDomain);
-        categoryCounts.set(
-            article.category,
-            (categoryCounts.get(article.category) ?? 0) + 1,
+        if (
+            enforceCategoryCap &&
+            (categoryCounts.get(
+                article.category,
+            ) ??
+                0) >=
+                CATEGORY_SOFT_CAP
+        ) {
+            return false;
+        }
+
+        return !accepted.some(
+            (other) =>
+                storiesMatch(
+                    article,
+                    other,
+                ),
         );
     };
 
-    for (const windowHours of SELECTION_WINDOWS_HOURS) {
-        for (const article of ranked) {
-            if (accepted.length >= limit) break;
-            if (ageHoursAtEditionCutoff(article.publishedAt, editionDate) > windowHours) {
+    const accept = (
+        article,
+    ) => {
+        accepted.push(
+            article,
+        );
+
+        usedSources.add(
+            article.sourceId,
+        );
+
+        usedPublisherDomains.add(
+            article.publisherDomain,
+        );
+
+        categoryCounts.set(
+            article.category,
+
+            (categoryCounts.get(
+                article.category,
+            ) ??
+                0) + 1,
+        );
+    };
+
+    for (
+        const windowHours of
+        SELECTION_WINDOWS_HOURS
+    ) {
+        for (
+            const article of
+            ranked
+        ) {
+            if (
+                accepted.length >=
+                limit
+            ) {
+                break;
+            }
+
+            if (
+                ageHoursAtEditionCutoff(
+                    article.publishedAt,
+                    editionDate,
+                ) >
+                windowHours
+            ) {
                 continue;
             }
-            if (canAccept(article, true)) accept(article);
+
+            if (
+                canAccept(
+                    article,
+                    true,
+                )
+            ) {
+                accept(article);
+            }
         }
-        if (accepted.length >= limit) break;
+
+        if (
+            accepted.length >=
+            limit
+        ) {
+            break;
+        }
     }
 
-    if (accepted.length < limit) {
-        for (const article of ranked) {
-            if (accepted.length >= limit) break;
+    if (
+        accepted.length <
+        limit
+    ) {
+        for (
+            const article of
+            ranked
+        ) {
             if (
-                ageHoursAtEditionCutoff(article.publishedAt, editionDate) >
+                accepted.length >=
+                limit
+            ) {
+                break;
+            }
+
+            if (
+                ageHoursAtEditionCutoff(
+                    article.publishedAt,
+                    editionDate,
+                ) >
                 MAX_LOOKBACK_HOURS
             ) {
                 continue;
             }
-            if (canAccept(article, false)) accept(article);
+
+            if (
+                canAccept(
+                    article,
+                    false,
+                )
+            ) {
+                accept(article);
+            }
         }
     }
 
     return accepted;
 };
 
-const errorMessage = (reason) =>
-    reason instanceof Error ? reason.message : String(reason);
+const errorMessage = (
+    reason,
+) =>
+    reason instanceof Error
+        ? reason.message
+        : String(reason);
 
-const setEditionHeaders = (res, { editionDate, edition, language }) => {
+const setEditionHeaders = (
+    res,
+    {
+        editionDate,
+        edition,
+        language,
+    },
+) => {
     res.setHeader(
         'Vercel-CDN-Cache-Control',
         'public, max-age=86400, stale-while-revalidate=3600, stale-if-error=604800',
     );
+
     res.setHeader(
         'Cache-Control',
         'public, max-age=0, must-revalidate',
     );
+
     res.setHeader(
         'Vercel-Cache-Tag',
         `gud-${editionDate}-${edition}-${EDITORIAL_RULESET_VERSION}`,
     );
-    res.setHeader('X-GUD-Edition', edition);
-    res.setHeader('X-GUD-Edition-Date', editionDate);
-    res.setHeader('X-GUD-Language', language);
-    res.setHeader('X-GUD-Shared-Snapshot', sharedEditionStoreConfigured() ? 'blob' : 'cdn-only');
-    res.setHeader('Content-Language', edition === 'latam' ? 'es-419' : 'en');
+
+    res.setHeader(
+        'X-GUD-Edition',
+        edition,
+    );
+
+    res.setHeader(
+        'X-GUD-Edition-Date',
+        editionDate,
+    );
+
+    res.setHeader(
+        'X-GUD-Language',
+        language,
+    );
+
+    res.setHeader(
+        'X-GUD-Shared-Snapshot',
+        sharedEditionStoreConfigured()
+            ? 'blob'
+            : 'cdn-only',
+    );
+
+    res.setHeader(
+        'Content-Language',
+        edition === 'latam'
+            ? 'es-419'
+            : 'en',
+    );
 };
 
-export default async function handler(req, res) {
-    if (req.method && req.method !== 'GET') {
-        res.setHeader('Allow', 'GET');
-        return res.status(405).json({ error: 'Method not allowed.' });
+export default async function handler(
+    req,
+    res,
+) {
+    if (
+        req.method &&
+        req.method !== 'GET'
+    ) {
+        res.setHeader(
+            'Allow',
+            'GET',
+        );
+
+        return res
+            .status(405)
+            .json({
+                error:
+                    'Method not allowed.',
+            });
     }
 
-    const editionDate = getEditionDate(req);
-    const edition = getRequestedEdition(req);
-    const language = languageForEdition(edition);
-    const newsSources = getNewsSources(edition);
+    const editionDate =
+        getEditionDate(req);
+
+    const edition =
+        getRequestedEdition(req);
+
+    const language =
+        languageForEdition(
+            edition,
+        );
+
+    const newsSources =
+        getNewsSources(
+            edition,
+        );
 
     try {
-        const existingEdition = await readDailyEdition({
-            editionDate,
-            edition,
-            rulesetVersion: EDITORIAL_RULESET_VERSION,
-        });
+        const existingEdition =
+            await readDailyEdition({
+                editionDate,
+                edition,
+
+                rulesetVersion:
+                    EDITORIAL_RULESET_VERSION,
+            });
 
         if (existingEdition) {
             // Read-only for every visitor: one shared optional curated snapshot,
             // generated ONLY on the admin's SAVE (never during public requests).
-            const curated = await readCuratedEdition({ editionDate, edition, rulesetVersion: EDITORIAL_RULESET_VERSION });
-            setEditionHeaders(res, { editionDate, edition, language });
-            res.setHeader('X-GUD-Snapshot-Status', curated ? 'curated' : 'hit');
-            return res.status(200).json(curated || existingEdition);
+            const curated =
+                await readCuratedEdition(
+                    {
+                        editionDate,
+                        edition,
+
+                        rulesetVersion:
+                            EDITORIAL_RULESET_VERSION,
+                    },
+                );
+
+            setEditionHeaders(
+                res,
+                {
+                    editionDate,
+                    edition,
+                    language,
+                },
+            );
+
+            res.setHeader(
+                'X-GUD-Snapshot-Status',
+
+                curated
+                    ? 'curated'
+                    : 'hit',
+            );
+
+            return res
+                .status(200)
+                .json(
+                    curated ||
+                        existingEdition,
+                );
         }
 
         // Visitors must NEVER trigger ingestion or paid processing.
         // In production, only Vercel Cron's secret can generate a missing edition.
-        const cronAuthorized = Boolean(process.env.CRON_SECRET) &&
-            req.headers.authorization === `Bearer ${process.env.CRON_SECRET}`;
-        const localBuildAllowed = process.env.GUD_ALLOW_ON_DEMAND_BUILD === 'true' &&
-            (!process.env.VERCEL_ENV || process.env.VERCEL_ENV === 'development');
-        if (!cronAuthorized && !localBuildAllowed) {
+        const cronAuthorized =
+            Boolean(
+                process.env
+                    .CRON_SECRET,
+            ) &&
+            req.headers
+                .authorization ===
+                `Bearer ${process.env.CRON_SECRET}`;
+
+        const localBuildAllowed =
+            process.env
+                .GUD_ALLOW_ON_DEMAND_BUILD ===
+                'true' &&
+            (!process.env
+                .VERCEL_ENV ||
+                process.env
+                    .VERCEL_ENV ===
+                    'development');
+
+        if (
+            !cronAuthorized &&
+            !localBuildAllowed
+        ) {
             // Serve the previous shared snapshot between the UTC date rollover and
             // the scheduled ingestion. It MUST NOT retain the normal 24-hour cache,
             // or the previous edition could mask a newly generated edition.
-            const previousDate = new Date(Date.parse(`${editionDate}T00:00:00Z`) - 86_400_000)
-                .toISOString().slice(0, 10);
-            const prior = await readDailyEdition({
-                editionDate: previousDate, edition,
-                rulesetVersion: EDITORIAL_RULESET_VERSION,
-            });
+            const previousDate =
+                new Date(
+                    Date.parse(
+                        `${editionDate}T00:00:00Z`,
+                    ) -
+                        86_400_000,
+                )
+                    .toISOString()
+                    .slice(
+                        0,
+                        10,
+                    );
+
+            const prior =
+                await readDailyEdition({
+                    editionDate:
+                        previousDate,
+
+                    edition,
+
+                    rulesetVersion:
+                        EDITORIAL_RULESET_VERSION,
+                });
+
             if (prior) {
-                res.setHeader('Cache-Control', 'public, max-age=30');
-                res.setHeader('Vercel-CDN-Cache-Control', 'public, max-age=60');
-                res.setHeader('X-GUD-Snapshot-Status', 'previous-day');
-                res.setHeader('Content-Language', edition === 'latam' ? 'es-419' : 'en');
-                return res.status(200).json(prior);
+                const curatedPrior =
+                    await readCuratedEdition(
+                        {
+                            editionDate:
+                                previousDate,
+
+                            edition,
+
+                            rulesetVersion:
+                                EDITORIAL_RULESET_VERSION,
+                        },
+                    );
+
+                res.setHeader(
+                    'Cache-Control',
+                    'public, max-age=30',
+                );
+
+                res.setHeader(
+                    'Vercel-CDN-Cache-Control',
+                    'public, max-age=60',
+                );
+
+                res.setHeader(
+                    'Vercel-Cache-Tag',
+                    `gud-${previousDate}-${edition}-${EDITORIAL_RULESET_VERSION}`,
+                );
+
+                res.setHeader(
+                    'X-GUD-Snapshot-Status',
+
+                    curatedPrior
+                        ? 'previous-day-curated'
+                        : 'previous-day',
+                );
+
+                res.setHeader(
+                    'X-GUD-Edition',
+                    edition,
+                );
+
+                res.setHeader(
+                    'X-GUD-Edition-Date',
+                    previousDate,
+                );
+
+                res.setHeader(
+                    'X-GUD-Language',
+                    language,
+                );
+
+                res.setHeader(
+                    'X-GUD-Shared-Snapshot',
+
+                    sharedEditionStoreConfigured()
+                        ? 'blob'
+                        : 'cdn-only',
+                );
+
+                res.setHeader(
+                    'Content-Language',
+
+                    edition ===
+                        'latam'
+                        ? 'es-419'
+                        : 'en',
+                );
+
+                return res
+                    .status(200)
+                    .json(
+                        curatedPrior ||
+                            prior,
+                    );
             }
-            res.setHeader('Cache-Control', 'no-store');
-            res.setHeader('Vercel-CDN-Cache-Control', 'no-store');
-            return res.status(503).json({
-                articles: [], generatedAt: new Date().toISOString(), editionDate,
-                edition, language, issueNumber: issueNumberForDate(editionDate),
-                count: 0, editionMinTarget: EDITION_MIN_TARGET, editionLimit: EDITION_LIMIT,
-                error: 'Daily edition not generated yet.',
-            });
+
+            res.setHeader(
+                'Cache-Control',
+                'no-store',
+            );
+
+            res.setHeader(
+                'Vercel-CDN-Cache-Control',
+                'no-store',
+            );
+
+            return res
+                .status(503)
+                .json({
+                    articles: [],
+
+                    generatedAt:
+                        new Date().toISOString(),
+
+                    editionDate,
+                    edition,
+                    language,
+
+                    issueNumber:
+                        issueNumberForDate(
+                            editionDate,
+                        ),
+
+                    count: 0,
+
+                    editionMinTarget:
+                        EDITION_MIN_TARGET,
+
+                    editionLimit:
+                        EDITION_LIMIT,
+
+                    error:
+                        'Daily edition not generated yet.',
+                });
         }
-        const results = await fetchSourcesWithConcurrency(
-            newsSources,
-            editionDate,
-            language,
-        );
-        const fulfilled = results.filter((result) => result.status === 'fulfilled');
-        const fulfilledCandidates = fulfilled.flatMap(
-            (result) => result.value.candidates,
-        );
-        const sourceDiagnostics = fulfilled.map(
-            (result) => result.value.diagnostics,
-        );
+
+        const results =
+            await fetchSourcesWithConcurrency(
+                newsSources,
+                editionDate,
+                language,
+            );
+
+        const fulfilled =
+            results.filter(
+                (result) =>
+                    result.status ===
+                    'fulfilled',
+            );
+
+        const fulfilledCandidates =
+            fulfilled.flatMap(
+                (result) =>
+                    result.value
+                        .candidates,
+            );
+
+        const sourceDiagnostics =
+            fulfilled.map(
+                (result) =>
+                    result.value
+                        .diagnostics,
+            );
+
         // Local pipeline always runs before ANY paid API. LLM sees <=18 selected
         // articles, never the feed pool, and is called once per shared edition.
-        const shortlist = buildEdition(
-            fulfilledCandidates, editionDate, language, SHORTLIST_LIMIT,
-        );
-        const { decisions, meta: llm } = await auditShortlist(shortlist);
-        let selected = shortlist;
+        const shortlist =
+            buildEdition(
+                fulfilledCandidates,
+                editionDate,
+                language,
+                SHORTLIST_LIMIT,
+            );
+
+        const {
+            decisions,
+            meta: llm,
+        } =
+            await auditShortlist(
+                shortlist,
+            );
+
+        let selected =
+            shortlist;
+
         if (llm.enabled) {
-            selected = shortlist.filter((article) => decisions.get(article.id)?.eligible === true);
+            selected =
+                shortlist.filter(
+                    (article) =>
+                        decisions.get(
+                            article.id,
+                        )?.eligible ===
+                        true,
+                );
+
             // If the provider completely fails, only use locally strong stories.
             // All such fallbacks are visibly marked in private diagnostics.
-            if (llm.accepted === 0 && llm.rejected === 0 && llm.unknown > 0) {
-                llm.errors.push('fallback_to_strict_local_review');
-                selected = shortlist.filter((article) =>
-                    article.ruleScore >= 12 &&
-                    (article.ml.confidence ?? 0) >= 0.6,
+            if (
+                llm.accepted ===
+                    0 &&
+                llm.rejected ===
+                    0 &&
+                llm.unknown > 0
+            ) {
+                llm.errors.push(
+                    'fallback_to_strict_local_review',
                 );
+
+                selected =
+                    shortlist.filter(
+                        (
+                            article,
+                        ) =>
+                            article.ruleScore >=
+                                12 &&
+                            (article
+                                .ml
+                                .confidence ??
+                                0) >=
+                                0.6,
+                    );
             }
         }
-        const selectedArticles = selected.slice(0, EDITION_LIMIT).map(toArticle);
-        const latamDiagnostic = edition === 'latam'
-            ? selectLatamDiagnosticExploration(sourceDiagnostics, editionDate)
-            : null;
-        const seenExplorationSources = new Set();
-        const reviewExploration = latamDiagnostic?.selected ?? sourceDiagnostics
-            .flatMap((source) => source.exploration || [])
-            .sort((a, b) => (b.mlScore ?? 0) - (a.mlScore ?? 0))
-            .filter((entry) => {
-                if (seenExplorationSources.has(entry.sourceId)) return false;
-                seenExplorationSources.add(entry.sourceId);
-                return true;
-            }).slice(0, 8);
-        const articles = await enrichArticleImages(selectedArticles);
 
-        const successfulSources = fulfilled.length;
-        const sourcesWithCandidates = sourceDiagnostics.filter(
-            (source) => source.candidates > 0,
-        ).length;
-        const uniqueSources = new Set(
-            articles.map((article) => article.source),
-        ).size;
-        const failedSources = results.flatMap((result, index) =>
-            result.status === 'rejected'
-                ? [
-                      {
-                          source: newsSources[index].name,
-                          id: newsSources[index].id,
-                          reason: errorMessage(result.reason),
-                      },
-                  ]
-                : [],
-        );
+        const selectedArticles =
+            selected
+                .slice(
+                    0,
+                    EDITION_LIMIT,
+                )
+                .map(toArticle);
 
-        const rejectionTotals = sourceDiagnostics.reduce(
-            (totals, source) => ({
-                invalid: totals.invalid + source.rejected.invalid,
-                blocked: totals.blocked + source.rejected.blocked,
-                outOfWindow: totals.outOfWindow + source.rejected.outOfWindow,
-                wrongLanguage:
-                    totals.wrongLanguage + source.rejected.wrongLanguage,
-                disqualified:
-                    totals.disqualified + source.rejected.disqualified,
-                falsePositive:
-                    totals.falsePositive + source.rejected.falsePositive,
-                noPositiveOutcome:
-                    totals.noPositiveOutcome + source.rejected.noPositiveOutcome,
-                belowScore: totals.belowScore + source.rejected.belowScore,
-                editorialGuard: totals.editorialGuard + source.rejected.editorialGuard,
-                ml: totals.ml + source.rejected.ml,
-            }),
-            emptyRejections(),
-        );
+        const latamDiagnostic =
+            edition === 'latam'
+                ? selectLatamDiagnosticExploration(
+                      sourceDiagnostics,
+                      editionDate,
+                  )
+                : null;
 
-        const totalFeedItems = sourceDiagnostics.reduce(
-            (total, source) => total + source.feedItems,
-            0,
-        );
-        const { start, end } = editionWindow(editionDate);
+        const seenExplorationSources =
+            new Set();
+
+        const reviewExploration =
+            latamDiagnostic?.selected ??
+            sourceDiagnostics
+                .flatMap(
+                    (source) =>
+                        source.exploration ||
+                        [],
+                )
+                .sort(
+                    (a, b) =>
+                        (b.mlScore ??
+                            0) -
+                        (a.mlScore ??
+                            0),
+                )
+                .filter(
+                    (entry) => {
+                        if (
+                            seenExplorationSources.has(
+                                entry.sourceId,
+                            )
+                        ) {
+                            return false;
+                        }
+
+                        seenExplorationSources.add(
+                            entry.sourceId,
+                        );
+
+                        return true;
+                    },
+                )
+                .slice(0, 8);
+
+        const articles =
+            await enrichArticleImages(
+                selectedArticles,
+            );
+
+        const successfulSources =
+            fulfilled.length;
+
+        const sourcesWithCandidates =
+            sourceDiagnostics.filter(
+                (source) =>
+                    source.candidates >
+                    0,
+            ).length;
+
+        const uniqueSources =
+            new Set(
+                articles.map(
+                    (article) =>
+                        article.source,
+                ),
+            ).size;
+
+        const failedSources =
+            results.flatMap(
+                (
+                    result,
+                    index,
+                ) =>
+                    result.status ===
+                    'rejected'
+                        ? [
+                              {
+                                  source:
+                                      newsSources[
+                                          index
+                                      ]
+                                          .name,
+
+                                  id: newsSources[
+                                      index
+                                  ].id,
+
+                                  reason:
+                                      errorMessage(
+                                          result.reason,
+                                      ),
+                              },
+                          ]
+                        : [],
+            );
+
+        const rejectionTotals =
+            sourceDiagnostics.reduce(
+                (
+                    totals,
+                    source,
+                ) => ({
+                    invalid:
+                        totals.invalid +
+                        source
+                            .rejected
+                            .invalid,
+
+                    blocked:
+                        totals.blocked +
+                        source
+                            .rejected
+                            .blocked,
+
+                    outOfWindow:
+                        totals.outOfWindow +
+                        source
+                            .rejected
+                            .outOfWindow,
+
+                    wrongLanguage:
+                        totals.wrongLanguage +
+                        source
+                            .rejected
+                            .wrongLanguage,
+
+                    disqualified:
+                        totals.disqualified +
+                        source
+                            .rejected
+                            .disqualified,
+
+                    falsePositive:
+                        totals.falsePositive +
+                        source
+                            .rejected
+                            .falsePositive,
+
+                    noPositiveOutcome:
+                        totals.noPositiveOutcome +
+                        source
+                            .rejected
+                            .noPositiveOutcome,
+
+                    belowScore:
+                        totals.belowScore +
+                        source
+                            .rejected
+                            .belowScore,
+
+                    editorialGuard:
+                        totals.editorialGuard +
+                        source
+                            .rejected
+                            .editorialGuard,
+
+                    ml:
+                        totals.ml +
+                        source
+                            .rejected
+                            .ml,
+                }),
+
+                emptyRejections(),
+            );
+
+        const totalFeedItems =
+            sourceDiagnostics.reduce(
+                (
+                    total,
+                    source,
+                ) =>
+                    total +
+                    source.feedItems,
+                0,
+            );
+
+        const {
+            start,
+            end,
+        } =
+            editionWindow(
+                editionDate,
+            );
 
         const payload = {
             articles,
-            generatedAt: new Date().toISOString(),
+
+            generatedAt:
+                new Date().toISOString(),
+
             editionDate,
             edition,
             language,
-            issueNumber: issueNumberForDate(editionDate),
-            count: articles.length,
-            editionMinTarget: EDITION_MIN_TARGET,
-            editionLimit: EDITION_LIMIT,
-            editorialRulesetVersion: EDITORIAL_RULESET_VERSION,
+
+            issueNumber:
+                issueNumberForDate(
+                    editionDate,
+                ),
+
+            count:
+                articles.length,
+
+            editionMinTarget:
+                EDITION_MIN_TARGET,
+
+            editionLimit:
+                EDITION_LIMIT,
+
+            editorialRulesetVersion:
+                EDITORIAL_RULESET_VERSION,
+
             uniqueSources,
-            sourcePool: newsSources.length,
+
+            sourcePool:
+                newsSources.length,
+
             successfulSources,
+
             sourcesWithCandidates,
-            candidateCount: fulfilledCandidates.length,
+
+            candidateCount:
+                fulfilledCandidates.length,
+
             diagnostics: {
-                imageCount: articles.filter((article) => Boolean(article.imageUrl))
-                    .length,
+                imageCount:
+                    articles.filter(
+                        (
+                            article,
+                        ) =>
+                            Boolean(
+                                article.imageUrl,
+                            ),
+                    ).length,
+
                 imageCoverage:
-                    articles.length > 0
+                    articles.length >
+                    0
                         ? Number(
                               (
-                                  articles.filter((article) =>
-                                      Boolean(article.imageUrl),
-                                  ).length / articles.length
-                              ).toFixed(3),
+                                  articles.filter(
+                                      (
+                                          article,
+                                      ) =>
+                                          Boolean(
+                                              article.imageUrl,
+                                          ),
+                                  ).length /
+                                  articles.length
+                              ).toFixed(
+                                  3,
+                              ),
                           )
                         : 0,
-                windowHours: MAX_LOOKBACK_HOURS,
-                preferredWindowHours: 24,
-                selectedLookbackHours: Math.ceil(
-                    articles.reduce(
-                        (oldest, article) =>
-                            Math.max(
+
+                windowHours:
+                    MAX_LOOKBACK_HOURS,
+
+                preferredWindowHours:
+                    24,
+
+                selectedLookbackHours:
+                    Math.ceil(
+                        articles.reduce(
+                            (
                                 oldest,
-                                ageHoursAtEditionCutoff(
-                                    article.publishedAt,
-                                    editionDate,
+                                article,
+                            ) =>
+                                Math.max(
+                                    oldest,
+
+                                    ageHoursAtEditionCutoff(
+                                        article.publishedAt,
+                                        editionDate,
+                                    ),
                                 ),
-                            ),
-                        0,
+                            0,
+                        ),
                     ),
-                ),
-                windowStart: new Date(start).toISOString(),
-                windowEnd: new Date(end).toISOString(),
+
+                windowStart:
+                    new Date(
+                        start,
+                    ).toISOString(),
+
+                windowEnd:
+                    new Date(
+                        end,
+                    ).toISOString(),
+
                 totalFeedItems,
-                rejections: rejectionTotals,
+
+                rejections:
+                    rejectionTotals,
+
                 failedSources,
             },
         };
 
         const telemetry = {
-            editionDate, edition,
-            generatedAt: payload.generatedAt,
+            editionDate,
+            edition,
+
+            generatedAt:
+                payload.generatedAt,
+
             input: {
-                sources: newsSources.length,
+                sources:
+                    newsSources.length,
+
                 successfulSources,
+
                 totalFeedItems,
-                localQualified: fulfilledCandidates.length,
-                exploration: reviewExploration.length,
-                ...(latamDiagnostic ? { explorationSampling: latamDiagnostic.diagnostics } : {}),
-                shortlist: shortlist.length,
-                published: articles.length,
-                rejections: rejectionTotals,
+
+                localQualified:
+                    fulfilledCandidates.length,
+
+                exploration:
+                    reviewExploration.length,
+
+                ...(latamDiagnostic
+                    ? {
+                          explorationSampling:
+                              latamDiagnostic.diagnostics,
+                      }
+                    : {}),
+
+                shortlist:
+                    shortlist.length,
+
+                published:
+                    articles.length,
+
+                rejections:
+                    rejectionTotals,
             },
+
             ml: {
                 ...getMLStatus(),
-                scored: sourceDiagnostics.reduce((n, source) => n + (source.mlScored || 0), 0),
-                constructive: fulfilledCandidates.filter(a => a.ml.label === 'constructive').length,
-                notConstructive: fulfilledCandidates.filter(a => a.ml.label === 'not_constructive').length,
-            },
-            llm,
-            // A bounded audit log. No credentials or unrestricted feed dumps.
-            decisions: [...shortlist.map((a) => ({
-                lane: 'shortlist',
-                id: a.id, title: a.title.slice(0, 180), url: a.url,
-                publishedAt: a.publishedAt, imageCandidates: a.imageCandidates,
-                deck: String(a.deck || '').slice(0, 360), source: a.source,
-                category: a.category, ruleScore: a.ruleScore,
-                mlLabel: a.ml.label, mlScore: a.ml.confidence,
-                llm: decisions.get(a.id) ?? (llm.enabled ? { eligible: null, reason: 'not_audited' } : null),
-                published: articles.some((story) => story.id === a.id),
-            })), ...reviewExploration.map((a) => ({
-                lane: 'exploration', id: a.id, title: a.title.slice(0, 180),
-                url: a.url, deck: a.deck, publishedAt: a.publishedAt,
-                imageCandidates: a.imageCandidates, source: a.source, category: a.category,
-                ruleScore: null, mlLabel: a.mlLabel, mlScore: a.mlScore,
-                llm: null, published: false, reason: a.reason,
-            }))],
-        };
-        const sharedPayload = await commitDailyEdition({
-            editionDate,
-            edition,
-            rulesetVersion: EDITORIAL_RULESET_VERSION,
-            payload,
-        });
 
-        if (sharedPayload.generatedAt === payload.generatedAt) {
-            await saveTelemetry(editionDate, edition, telemetry);
+                scored:
+                    sourceDiagnostics.reduce(
+                        (
+                            n,
+                            source,
+                        ) =>
+                            n +
+                            (source.mlScored ||
+                                0),
+                        0,
+                    ),
+
+                constructive:
+                    fulfilledCandidates.filter(
+                        (a) =>
+                            a.ml
+                                .label ===
+                            'constructive',
+                    ).length,
+
+                notConstructive:
+                    fulfilledCandidates.filter(
+                        (a) =>
+                            a.ml
+                                .label ===
+                            'not_constructive',
+                    ).length,
+            },
+
+            llm,
+
+            // A bounded audit log. No credentials or unrestricted feed dumps.
+            decisions: [
+                ...shortlist.map(
+                    (a) => ({
+                        lane:
+                            'shortlist',
+
+                        id: a.id,
+
+                        title:
+                            a.title.slice(
+                                0,
+                                180,
+                            ),
+
+                        url:
+                            a.url,
+
+                        publishedAt:
+                            a.publishedAt,
+
+                        imageCandidates:
+                            a.imageCandidates,
+
+                        deck:
+                            String(
+                                a.deck ||
+                                    '',
+                            ).slice(
+                                0,
+                                360,
+                            ),
+
+                        source:
+                            a.source,
+
+                        category:
+                            a.category,
+
+                        ruleScore:
+                            a.ruleScore,
+
+                        mlLabel:
+                            a.ml
+                                .label,
+
+                        mlScore:
+                            a.ml
+                                .confidence,
+
+                        llm:
+                            decisions.get(
+                                a.id,
+                            ) ??
+                            (llm.enabled
+                                ? {
+                                      eligible:
+                                          null,
+
+                                      reason:
+                                          'not_audited',
+                                  }
+                                : null),
+
+                        published:
+                            articles.some(
+                                (
+                                    story,
+                                ) =>
+                                    story.id ===
+                                    a.id,
+                            ),
+                    }),
+                ),
+
+                ...reviewExploration.map(
+                    (a) => ({
+                        lane:
+                            'exploration',
+
+                        id: a.id,
+
+                        title:
+                            a.title.slice(
+                                0,
+                                180,
+                            ),
+
+                        url:
+                            a.url,
+
+                        deck:
+                            a.deck,
+
+                        publishedAt:
+                            a.publishedAt,
+
+                        imageCandidates:
+                            a.imageCandidates,
+
+                        source:
+                            a.source,
+
+                        category:
+                            a.category,
+
+                        ruleScore:
+                            null,
+
+                        mlLabel:
+                            a.mlLabel,
+
+                        mlScore:
+                            a.mlScore,
+
+                        llm:
+                            null,
+
+                        published:
+                            false,
+
+                        reason:
+                            a.reason,
+                    }),
+                ),
+            ],
+        };
+
+        const sharedPayload =
+            await commitDailyEdition(
+                {
+                    editionDate,
+                    edition,
+
+                    rulesetVersion:
+                        EDITORIAL_RULESET_VERSION,
+
+                    payload,
+                },
+            );
+
+        if (
+            sharedPayload.generatedAt ===
+            payload.generatedAt
+        ) {
+            await saveTelemetry(
+                editionDate,
+                edition,
+                telemetry,
+            );
         }
-        setEditionHeaders(res, { editionDate, edition, language });
-        res.setHeader(
-            'X-GUD-Snapshot-Status',
-            sharedPayload.generatedAt === payload.generatedAt ? 'created' : 'race-winner',
+
+        setEditionHeaders(
+            res,
+            {
+                editionDate,
+                edition,
+                language,
+            },
         );
 
-        return res.status(200).json(sharedPayload);
+        res.setHeader(
+            'X-GUD-Snapshot-Status',
+
+            sharedPayload.generatedAt ===
+                payload.generatedAt
+                ? 'created'
+                : 'race-winner',
+        );
+
+        return res
+            .status(200)
+            .json(
+                sharedPayload,
+            );
     } catch (error) {
-        console.error('GUD source ingestion error:', error);
-        return res.status(500).json({
-            articles: [],
-            generatedAt: new Date().toISOString(),
-            editionDate,
-            edition,
-            language,
-            issueNumber: issueNumberForDate(editionDate),
-            count: 0,
-            editionMinTarget: EDITION_MIN_TARGET,
-            editionLimit: EDITION_LIMIT,
-            editorialRulesetVersion: EDITORIAL_RULESET_VERSION,
-            uniqueSources: 0,
-            error: 'Unable to build today’s edition.',
-        });
+        console.error(
+            'GUD source ingestion error:',
+            error,
+        );
+
+        return res
+            .status(500)
+            .json({
+                articles: [],
+
+                generatedAt:
+                    new Date().toISOString(),
+
+                editionDate,
+                edition,
+                language,
+
+                issueNumber:
+                    issueNumberForDate(
+                        editionDate,
+                    ),
+
+                count: 0,
+
+                editionMinTarget:
+                    EDITION_MIN_TARGET,
+
+                editionLimit:
+                    EDITION_LIMIT,
+
+                editorialRulesetVersion:
+                    EDITORIAL_RULESET_VERSION,
+
+                uniqueSources:
+                    0,
+
+                error:
+                    'Unable to build today’s edition.',
+            });
     }
 }
